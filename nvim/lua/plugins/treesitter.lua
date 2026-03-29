@@ -4,79 +4,75 @@
 return {
 	"nvim-treesitter/nvim-treesitter",
 	build = ":TSUpdate",
+	lazy = false,
 	dependencies = {
 		"nvim-treesitter/nvim-treesitter-textobjects",
 		"windwp/nvim-ts-autotag",
 	},
 	config = function()
-		require("nvim-treesitter.configs").setup({
-			-- A list of parser names, or "all"
-			ensure_installed = {
-				"vimdoc",
-				"javascript",
-				"typescript",
-				"c",
-				"cpp",
-				"lua",
-				"rust",
-				"go",
-				"gomod",
-				"gosum",
-				"java",
-				"jsdoc",
-				"bash",
-				"latex",
-				"bibtex",
-				"r",
-				"markdown",
-				"markdown_inline",
-				"zig",
-				"python",
-			},
+		local ts = require("nvim-treesitter")
+		ts.setup()
 
-			-- Install parsers synchronously (only applied to `ensure_installed`)
-			sync_install = false,
+		-- Install parsers (skips already installed ones)
+		ts.install({
+			"vimdoc",
+			"javascript",
+			"typescript",
+			"c",
+			"cpp",
+			"lua",
+			"rust",
+			"go",
+			"gomod",
+			"gosum",
+			"java",
+			"jsdoc",
+			"bash",
+			"latex",
+			"bibtex",
+			"r",
+			"markdown",
+			"markdown_inline",
+			"zig",
+			"python",
+			"prisma",
+		})
 
-			-- Automatically install missing parsers when entering buffer
-			-- Recommendation: set to false if you don"t have `tree-sitter` CLI installed locally
-			auto_install = true,
+		-- Enable treesitter features per filetype
+		vim.api.nvim_create_autocmd("FileType", {
+			callback = function(event)
+				local buf = event.buf
+				local lang = vim.treesitter.language.get_lang(event.match) or event.match
 
-			indent = {
-				enable = true,
-			},
+				-- Skip html
+				if lang == "html" then
+					return
+				end
 
-			highlight = {
-				-- `false` will disable the whole extension
-				enable = true,
-				disable = function(lang, buf)
-					if lang == "html" then
-						return true
-					end
+				-- Skip large files
+				local max_filesize = 100 * 1024 -- 100 KB
+				local ok, stats = pcall(vim.uv.fs_stat, vim.api.nvim_buf_get_name(buf))
+				if ok and stats and stats.size > max_filesize then
+					vim.notify(
+						"File larger than 100KB treesitter disabled for performance",
+						vim.log.levels.WARN,
+						{ title = "Treesitter" }
+					)
+					return
+				end
 
-					local max_filesize = 100 * 1024 -- 100 KB
-					local ok, stats = pcall(vim.uv.fs_stat, vim.api.nvim_buf_get_name(buf))
-					if ok and stats and stats.size > max_filesize then
-						vim.notify(
-							"File larger than 100KB treesitter disabled for performance",
-							vim.log.levels.WARN,
-							{ title = "Treesitter" }
-						)
-						return true
-					end
-				end,
+				-- Enable highlighting
+				pcall(vim.treesitter.start, buf, lang)
 
-				-- Setting this to true will run `:h syntax` and tree-sitter at the same time.
-				-- Set this to `true` if you depend on "syntax" being enabled (like for indentation).
-				-- Using this option may slow down your editor, and you may see some duplicate highlights.
-				-- Instead of true it can also be a list of languages
-				additional_vim_regex_highlighting = { "markdown" },
-			},
+				-- Enable indentation
+				vim.bo[buf].indentexpr = "v:lua.require'nvim-treesitter'.indentexpr()"
+			end,
 		})
 
 		-- Auto-close and auto-rename HTML/JSX tags
 		require("nvim-ts-autotag").setup()
 
-		-- Set up textobjects keymaps manually (required for newer nvim-treesitter)
+		-- Set up textobjects keymaps manually
 		local ts_select = require("nvim-treesitter-textobjects.select")
 		local ts_move = require("nvim-treesitter-textobjects.move")
 		local ts_swap = require("nvim-treesitter-textobjects.swap")
@@ -127,14 +123,19 @@ return {
 			ts_swap.swap_previous("@parameter.inner", "textobjects")
 		end, { desc = "Swap with prev argument" })
 
-		local treesitter_parser_config = require("nvim-treesitter.parsers").get_parser_configs()
-		treesitter_parser_config.templ = {
-			install_info = {
-				url = "https://github.com/vrischmann/tree-sitter-templ.git",
-				files = { "src/parser.c", "src/scanner.c" },
-				branch = "master",
-			},
-		}
+		-- Custom parser for templ
+		vim.api.nvim_create_autocmd("User", {
+			pattern = "TSUpdate",
+			callback = function()
+				require("nvim-treesitter.parsers").templ = {
+					install_info = {
+						url = "https://github.com/vrischmann/tree-sitter-templ.git",
+						files = { "src/parser.c", "src/scanner.c" },
+						branch = "master",
+					},
+				}
+			end,
+		})
 
 		vim.treesitter.language.register("templ", "templ")
 	end,

@@ -3,6 +3,15 @@ if [[ -r "${XDG_CACHE_HOME:-$HOME/.cache}/p10k-instant-prompt-${(%):-%n}.zsh" ]]
   source "${XDG_CACHE_HOME:-$HOME/.cache}/p10k-instant-prompt-${(%):-%n}.zsh"
 fi
 
+export NVM_DIR="$HOME/.nvm"
+[ -s "$(brew --prefix nvm)/nvm.sh" ] && \. "$(brew --prefix nvm)/nvm.sh"
+[ -s "$(brew --prefix nvm)/etc/bash_completion.d/nvm" ] && \. "$(brew --prefix nvm)/etc/bash_completion.d/nvm"
+
+export PATH="/opt/homebrew/bin:$PATH"
+
+
+export GITHUB_PERSONAL_ACCESS_TOKEN="$(security find-generic-password -a $USER -s github-pat -w 2>/dev/null)"
+
 # Prompt
 autoload -Uz promptinit
 promptinit
@@ -91,20 +100,21 @@ alias fgrep='fgrep --color=auto'
 alias egrep='egrep --color=auto'
 
 alias ..='cd ..'
+alias v='nvim .'
 
 # Git
 alias g='git'
-alias ga='git add .'
+alias gaa='git add .'
 alias gb='git branch'
-alias gc='git commit'
-alias gca='git commit -am'
+alias gcm='git commit -m'
 alias gd='git diff'
-alias gl='git log --oneline --graph --decorate --all'
+alias gll='git log --oneline --graph --decorate --all'
+alias gl='git log'
 alias gp='git push'
 alias gpl='git pull'
 alias gs='git status'
 alias gcl='git clone'
-alias gco='git checkout'
+alias gc='git checkout'
 alias gcb='git checkout -b'
 alias gr='git restore'
 
@@ -115,10 +125,19 @@ alias dcu='docker compose up'
 alias dcub='docker compose up --build'
 alias dcd='docker compose down'
 
+# Common Directory Shortcuts
+alias fl='cd ~/NER/Finishline/'
+alias dotfile='cd ~/dotfiles/'
+alias mng='cd ~/NExT/MNG_Inventory_System/'
+
+# Claude Code
+alias cld='claude --dangerously-skip-permissions'
+
+
 # Scripts
 alias tn='tmux-cmd'
 
-export PATH="$HOME/.local/bin:$PATH"
+export PATH="$HOME/.local/bin:$HOME/dotfiles/scripts:$PATH"
 
 # Editor
 export EDITOR=/opt/homebrew/bin/nvim
@@ -151,3 +170,11 @@ fi
 
 # Neovim venv tools
 export PATH="$HOME/.venvs/nvim/bin:$PATH"
+export PATH="/opt/homebrew/opt/postgresql@16/bin:$PATH"
+
+# bun completions
+[ -s "/Users/chrispyle/.bun/_bun" ] && source "/Users/chrispyle/.bun/_bun"
+
+# bun
+export BUN_INSTALL="$HOME/.bun"
+export PATH="$BUN_INSTALL/bin:$PATH"

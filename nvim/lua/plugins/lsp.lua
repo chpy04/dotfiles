@@ -20,7 +20,8 @@ return {
 					"gopls",
 					"bash-language-server",
 					"jdtls",
-					-- Formatters
+					"prisma-language-server",
+				-- Formatters
 					"stylua",
 					"prettier",
 					"shfmt",
@@ -69,6 +70,27 @@ return {
 				["<C-n>"] = cmp.mapping.select_next_item({ behavior = cmp.SelectBehavior.Select }),
 				["<C-y>"] = cmp.mapping.confirm({ select = true }),
 				["<C-Space>"] = cmp.mapping.complete(),
+				["<Tab>"] = cmp.mapping(function(fallback)
+					local copilot_ok, copilot = pcall(require, "copilot.suggestion")
+					if copilot_ok and copilot.is_visible() then
+						copilot.accept()
+					elseif cmp.visible() then
+						cmp.confirm({ select = true })
+					elseif require("luasnip").expand_or_jumpable() then
+						require("luasnip").expand_or_jump()
+					else
+						fallback()
+					end
+				end, { "i", "s" }),
+				["<S-Tab>"] = cmp.mapping(function(fallback)
+					if cmp.visible() then
+						cmp.select_prev_item()
+					elseif require("luasnip").jumpable(-1) then
+						require("luasnip").jump(-1)
+					else
+						fallback()
+					end
+				end, { "i", "s" }),
 			}),
 			sources = cmp.config.sources({
 				{ name = "nvim_lsp" },
@@ -287,6 +309,12 @@ return {
 			root_markers = { ".git" },
 		})
 
+		-- Prisma
+		vim.lsp.config("prismals", {
+			filetypes = { "prisma" },
+			root_markers = { ".git" },
+		})
+
 		-- Enable all Mason-managed servers
 		vim.lsp.enable({
 			"lua_ls",
@@ -299,9 +327,31 @@ return {
 			"rust_analyzer",
 			"gopls",
 			"bashls",
+			"prismals",
 		})
 
-		-- R (installed via R, not Mason)
+		-- Racket (installed via raco, not Mason)
+	local racket_lsp_group = vim.api.nvim_create_augroup("RacketLanguageServer", { clear = true })
+
+	vim.api.nvim_create_autocmd("FileType", {
+		group = racket_lsp_group,
+		pattern = { "racket", "scheme" },
+		callback = function()
+			local root_dir = vim.fn.getcwd()
+			local git = vim.fs.find(".git", { upward = true })[1]
+			if git then
+				root_dir = vim.fs.dirname(git)
+			end
+
+			vim.lsp.start({
+				name = "racket_langserver",
+				cmd = { "racket", "-l", "racket-langserver" },
+				root_dir = root_dir,
+			})
+		end,
+	})
+
+	-- R (installed via R, not Mason)
 		-- Use autocmd to explicitly start server since it's not managed by Mason
 		local r_lsp_group = vim.api.nvim_create_augroup("RLanguageServer", { clear = true })
 

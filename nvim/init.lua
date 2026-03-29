@@ -28,3 +28,9 @@ local ok, _ = pcall(vim.cmd.colorscheme, theme)
 if not ok then
 	vim.notify("Colorscheme '" .. theme .. "' not found, falling back to default", vim.log.levels.WARN)
 end
+
+-- Ensure NotifyBackground is defined (prevents nvim-notify warning)
+if vim.fn.hlexists("NotifyBackground") == 0 or vim.api.nvim_get_hl(0, { name = "NotifyBackground" }).bg == nil then
+	local normal_bg = vim.api.nvim_get_hl(0, { name = "Normal" }).bg
+	vim.api.nvim_set_hl(0, "NotifyBackground", { bg = normal_bg or 0x000000 })
+end

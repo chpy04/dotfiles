@@ -1,5 +1,6 @@
 return {
 	"stevearc/conform.nvim",
+	event = { "BufReadPre", "BufNewFile" },
 	keys = {
 		{
 			"<leader>lf",
@@ -10,7 +11,12 @@ return {
 		},
 	},
 	opts = {
+		format_on_save = {
+			timeout_ms = 2000,
+			lsp_format = "fallback",
+		},
 		formatters_by_ft = {
+			racket = { "racket_fmt" },
 			lua = { "stylua" },
 			python = { "ruff_format" },
 			c = { "clang_format" },
@@ -34,6 +40,11 @@ return {
 			lsp_format = "fallback",
 		},
 		formatters = {
+			racket_fmt = {
+				command = "raco",
+				args = { "fmt" },
+				stdin = true,
+			},
 			ruff_format = {
 				command = "ruff",
 				args = { "format", "--stdin-filename", "$FILENAME" },

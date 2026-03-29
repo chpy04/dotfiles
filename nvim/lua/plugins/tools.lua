@@ -16,11 +16,54 @@ return {
 			{ "<leader>nt", "<cmd>Neotree toggle<cr>", silent = true, desc = "Neo-tree: toggle" },
 		},
 		opts = {
+			default_component_configs = {
+				diagnostics = {
+					symbols = {
+						hint = "󰌵",
+						info = " ",
+						warn = " ",
+						error = " ",
+					},
+					highlights = {
+						hint = "DiagnosticSignHint",
+						info = "DiagnosticSignInfo",
+						warn = "DiagnosticSignWarn",
+						error = "DiagnosticSignError",
+					},
+				},
+				git_status = {
+					symbols = {
+						added = "",
+						modified = "",
+						deleted = "✖",
+						renamed = "󰁕",
+						untracked = "",
+						ignored = "",
+						unstaged = "󰄱",
+						staged = "",
+						conflict = "",
+					},
+				},
+			},
 			filesystem = {
+				use_libuv_file_watcher = true,
 				filtered_items = {
 					visible = true,
 					hide_dotfiles = false,
 					hide_gitignored = true,
+				},
+				components = {
+					name = function(config, node, state)
+						local result = require("neo-tree.sources.common.components").name(config, node, state)
+						local diag = state.diagnostics_lookup or {}
+						local severity = diag[node:get_id()]
+						if severity == vim.diagnostic.severity.ERROR then
+							result.highlight = "DiagnosticError"
+						elseif severity == vim.diagnostic.severity.WARN then
+							result.highlight = "DiagnosticWarn"
+						end
+						return result
+					end,
 				},
 			},
 			window = {
@@ -185,13 +228,21 @@ return {
 	},
 
 	----------------------------------------------------------------------
+	-- Sleuth - auto-detect indentation from file content
+	----------------------------------------------------------------------
+	{ "tpope/vim-sleuth", event = "BufReadPre" },
+
+	----------------------------------------------------------------------
 	-- Autopairs
 	----------------------------------------------------------------------
 	{
 		"windwp/nvim-autopairs",
 		event = "InsertEnter",
 		config = function()
-			require("nvim-autopairs").setup()
+			require("nvim-autopairs").setup({
+				check_ts = true, -- use treesitter to avoid pairing inside strings/comments
+				map_cr = true, -- expand pairs on Enter
+			})
 
 			-- Integrate with nvim-cmp if present
 			local ok_cmp, cmp = pcall(require, "cmp")

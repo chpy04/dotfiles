@@ -7,6 +7,7 @@ vim.keymap.set("v", "<leader>x", '"+d', { silent = true, desc = "Cut to system c
 
 -- Clear search
 vim.keymap.set("n", "<leader>/", "<cmd>nohlsearch<cr>", { silent = true, desc = "Clear search highlight" })
+vim.keymap.set("n", "<Esc><Esc>", "<cmd>nohlsearch<cr>", { silent = true, desc = "Clear search highlight" })
 
 -- Open Terminal
 vim.keymap.set("n", "<leader>t", function()
@@ -42,6 +43,9 @@ vim.keymap.set("n", "<C-h>", "<C-w>h", { silent = true, desc = "Move to left spl
 vim.keymap.set("n", "<C-j>", "<C-w>j", { silent = true, desc = "Move to below split" })
 vim.keymap.set("n", "<C-k>", "<C-w>k", { silent = true, desc = "Move to above split" })
 vim.keymap.set("n", "<C-l>", "<C-w>l", { silent = true, desc = "Move to right split" })
+
+-- Go to definition (follow into other files)
+vim.keymap.set("n", "gd", "<C-]>", { silent = true, desc = "Go to definition" })
 
 -- Keep selection after indent/unindent
 vim.keymap.set("v", "<", "<gv", { silent = true, desc = "Indent left and reselect" })

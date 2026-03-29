@@ -41,6 +41,16 @@ vim.keymap.set("n", "<leader>lef", function()
 	vim.diagnostic.open_float(nil, { focusable = true })
 end, { silent = true, desc = "Diagnostics: float" })
 
+-- gh: Show diagnostic if available, otherwise show hover (like VSCode Vim)
+vim.keymap.set("n", "gh", function()
+	local diagnostics = vim.diagnostic.get(0, { lnum = vim.fn.line(".") - 1 })
+	if #diagnostics > 0 then
+		vim.diagnostic.open_float(nil, { focusable = true })
+	else
+		vim.lsp.buf.hover()
+	end
+end, { silent = true, desc = "Show diagnostic or hover" })
+
 -- Navigation: next / prev diagnostic
 vim.keymap.set("n", "]d", function()
 	vim.diagnostic.jump({ count = 1, float = true })
@@ -67,6 +77,22 @@ end, { silent = true, desc = "Diagnostics: next warning" })
 vim.keymap.set("n", "[w", function()
 	vim.diagnostic.jump({ count = -1, float = true, severity = vim.diagnostic.severity.WARN })
 end, { silent = true, desc = "Diagnostics: prev warning" })
+
+-- Copy diagnostic under cursor to clipboard
+vim.keymap.set("n", "<leader>ley", function()
+	local diagnostics = vim.diagnostic.get(0, { lnum = vim.fn.line(".") - 1 })
+	if #diagnostics == 0 then
+		vim.notify("No diagnostics on this line", vim.log.levels.INFO)
+		return
+	end
+	local messages = {}
+	for _, d in ipairs(diagnostics) do
+		table.insert(messages, d.message)
+	end
+	local text = table.concat(messages, "\n")
+	vim.fn.setreg("+", text)
+	vim.notify("Copied diagnostic to clipboard", vim.log.levels.INFO)
+end, { silent = true, desc = "Diagnostics: yank to clipboard" })
 
 -- Send diagnostics to quickfix / loclist
 vim.keymap.set("n", "<leader>leq", function()

@@ -93,14 +93,21 @@ return {
 						width = 0.95,
 						height = 0.95,
 						horizontal = {
-							preview_width = 0.6, -- preview on the right, larger
+							preview_width = 0.6,
 						},
 					},
 					preview = { hide_on_startup = false },
 					borderchars = { "─", "│", "─", "│", "╭", "╮", "╯", "╰" },
+					file_ignore_patterns = {
+						"node_modules/",
+						".git/",
+						"__pycache__/",
+						".venv/",
+						"venv/",
+						"%.lock",
+					},
 				},
 				extensions = {
-					-- Make ui-select follow the same layout instead of dropdown
 					["ui-select"] = {
 						layout_strategy = "horizontal",
 						sorting_strategy = "ascending",
