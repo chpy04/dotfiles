@@ -34,6 +34,9 @@ vim.opt.completeopt = "menu,menuone,noselect"
 vim.opt.updatetime = 250
 vim.opt.timeoutlen = 300
 
+-- Clipboard (OSC 52 works over SSH via Kitty)
+vim.opt.clipboard = "unnamedplus"
+
 -- Leaders
 vim.g.mapleader = " "
 vim.g.maplocalleader = "\\"
