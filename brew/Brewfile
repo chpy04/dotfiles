@@ -1,231 +1,29 @@
-tap "anomalyco/tap"
-tap "hashicorp/tap"
 tap "nikitabobko/tap"
-# Clone of cat(1) with syntax highlighting and Git integration
-brew "bat"
-# GNU File, Shell, and Text utilities
-brew "coreutils"
-# Bash Automated Testing System
-brew "bats-core"
-# Resource monitor. C++ version and continuation of bashtop and bpytop
-brew "btop"
-# Cross-platform make
-brew "cmake"
-# Documentation for CMake
-brew "cmake-docs"
-# More intuitive version of du in rust
-brew "dust"
-# Modern, maintained replacement for ls
-brew "eza"
-# Like neofetch, but much faster because written mostly in C
-brew "fastfetch"
-# Simple, fast and user-friendly alternative to find
-brew "fd"
-# Play, record, convert, and stream select audio and video codecs
-brew "ffmpeg"
-# Banner-like program prints strings as ASCII art
-brew "figlet"
-# Infamous electronic fortune-cookie generator
-brew "fortune"
-# Command-line fuzzy finder written in Go
-brew "fzf"
-# Command-line interface for SQLite
-brew "sqlite"
-# Open-source, cross-platform JavaScript runtime environment
-brew "node"
-# Interact with Google Gemini AI models from the command-line
-brew "gemini-cli"
-# GitHub command-line tool
-brew "gh"
-# Distributed revision control system
-brew "git"
-# Syntax-highlighting pager for git and diff output
-brew "git-delta"
-# GNU Privacy Guard (OpenPGP)
-brew "gnupg"
-# Open source programming language to build simple/reliable/efficient software
-brew "go"
-# Text-based UI library
-brew "ncurses"
-# Improved top (interactive process viewer)
-brew "htop"
-# Tools and libraries to manipulate images in select formats
-brew "imagemagick"
-# Lightweight and flexible command-line JSON processor
-brew "jq"
-# Interpreted, interactive, object-oriented programming language
-brew "python@3.14"
-# Interactive environments for writing and running code
-brew "jupyterlab", restart_service: :changed
-# Add indentation to LaTeX files
-brew "latexindent"
-# Simple terminal UI for git commands
-brew "lazygit"
-# Next-gen compiler infrastructure
-brew "llvm"
-# LLVM Project Linker
-brew "lld"
-# NCurses Disk Usage
-brew "ncdu"
-# Ambitious Vim-fork focused on extensibility and agility
-brew "neovim"
-# Create, run, and share large language models (LLMs)
-brew "ollama"
-# Development kit for the Java programming language
-brew "openjdk"
-# Pinentry for GPG on Mac
-brew "pinentry-mac"
-# Execute binaries from Python packages in isolated environments
-brew "pipx"
-# Package compiler and linker metadata toolkit
-brew "pkgconf"
-# Python package management tool
-brew "poetry"
-# PDF rendering library (based on the xpdf-3.0 code base)
-brew "poppler"
-# Theme for zsh
-brew "powerlevel10k"
-# Modern replacement for ps written in Rust
-brew "procs"
-# Interpreted, interactive, object-oriented programming language
-brew "python@3.11"
-# Interpreted, interactive, object-oriented programming language
-brew "python@3.13"
-# Software environment for statistical computing
-brew "r"
-# Search tool like grep and The Silver Searcher
-brew "ripgrep"
-# Extremely fast Python linter, written in Rust
-brew "ruff"
-# 7-Zip is a file archiver with a high compression ratio
-brew "sevenzip"
-# Organize software neatly under a single directory tree (e.g. /usr/local)
-brew "stow"
-# Programmatically correct mistyped console commands
-brew "thefuck"
-# Terminal multiplexer
-brew "tmux"
-# Display directories as trees (with optional color/HTML output)
-brew "tree"
-# Incremental parsing library
-brew "tree-sitter"
-# Parser generator tool
-brew "tree-sitter-cli"
-# Extremely fast Python package installer and resolver, written in Rust
-brew "uv"
-# Internet file retriever
-brew "wget"
-# JavaScript package manager
-brew "yarn"
-# Blazing fast terminal file manager written in Rust, based on async I/O
-brew "yazi"
-# Fish-like fast/unobtrusive autosuggestions for zsh
+
+# Shell
 brew "zsh-autosuggestions"
-# Fish shell like syntax highlighting for zsh
 brew "zsh-syntax-highlighting"
-# The AI coding agent built for the terminal.
-brew "anomalyco/tap/opencode"
-# Terraform
-brew "hashicorp/tap/terraform"
-# AeroSpace is an i3-like tiling window manager for macOS
+brew "powerlevel10k"
+brew "fzf"
+
+# Core CLI
+brew "git"
+brew "gh"
+brew "jq"
+brew "ripgrep"
+brew "fd"
+brew "tree"
+brew "wget"
+
+# Neovim + what the config shells out to (Telescope, LSP/Mason installs, treesitter, lazygit.nvim)
+brew "neovim"
+brew "tree-sitter-cli"
+brew "lazygit"
+brew "node"
+brew "python@3.13"
+brew "go"
+
+# Apps
 cask "nikitabobko/tap/aerospace"
-# Display management tool
-cask "betterdisplay"
-# Web browser focusing on privacy
-cask "brave-browser"
-# Utility that prevents the system from going to sleep
-cask "caffeine"
-# Anthropic's official Claude AI desktop app
-cask "claude"
-# Terminal-based AI coding assistant
-cask "claude-code"
-# OpenAI's coding agent that runs in your terminal
-cask "codex"
-# Two-panel file manager
-cask "commander-one"
-# Write, edit, and chat about your code with AI
-cask "cursor"
-# Universal database tool and SQL client
-cask "dbeaver-community"
-# Voice and text chat software
-cask "discord"
-# App to build and share containerised applications and microservices
-cask "docker-desktop"
-# Free and open-source image editor
-cask "gimp"
-# Web browser
-cask "google-chrome"
-# Keyboard customiser
+cask "ghostty"
 cask "karabiner-elements"
-# Free cross-platform office suite, fresh version
-cask "libreoffice"
-# Sandbox construction video game
-cask "minecraft"
-# App to write, plan, collaborate, and get organised
-cask "notion"
-# Knowledge base that works on top of a local folder of plain text Markdown files
-cask "obsidian"
-# Image editor
-cask "paintbrush"
-# Collaboration platform for API development
-cask "postman"
-# Client for Proton Drive
-cask "proton-drive"
-# Client for Proton Mail and Proton Calendar
-cask "proton-mail"
-# Bridges Proton Mail to email clients supporting IMAP and SMTP protocols
-cask "proton-mail-bridge"
-# Desktop client for Proton Pass
-cask "proton-pass"
-# VPN client focusing on security
-cask "protonvpn"
-# Control your tools with a few keystrokes
-cask "raycast"
-# Data science software focusing on R and Python
-cask "rstudio"
-# Tool to reverse the direction of scrolling
-cask "scroll-reverser"
-# Team communication and collaboration software
-cask "slack"
-# Music streaming service
-cask "spotify"
-# Free, open-source, and completely encrypted notes app
-cask "standard-notes"
-# System monitor for the menu bar
-cask "stats"
-# Video game digital distribution service
-cask "steam"
-# Customizable email client
-cask "thunderbird"
-# Virtual machines UI using QEMU
-cask "utm"
-# Open-source code editor
-cask "visual-studio-code"
-# Multimedia player
-cask "vlc"
-# Remote desktop application focusing on security
-cask "vnc-viewer"
-# Native desktop client for WhatsApp
-cask "whatsapp"
-# Video communication and virtual meeting platform
-cask "zoom"
-vscode "charliermarsh.ruff"
-vscode "esbenp.prettier-vscode"
-vscode "github.copilot-chat"
-vscode "mechatroner.rainbow-csv"
-vscode "ms-azuretools.vscode-containers"
-vscode "ms-python.debugpy"
-vscode "ms-python.python"
-vscode "ms-python.vscode-pylance"
-vscode "ms-python.vscode-python-envs"
-vscode "ms-toolsai.jupyter"
-vscode "ms-toolsai.jupyter-keymap"
-vscode "ms-toolsai.jupyter-renderers"
-vscode "ms-toolsai.vscode-jupyter-cell-tags"
-vscode "ms-toolsai.vscode-jupyter-slideshow"
-vscode "ms-vscode-remote.remote-containers"
-vscode "reditorsupport.r"
-vscode "reditorsupport.r-syntax"
-vscode "shd101wyy.markdown-preview-enhanced"
-vscode "tomoki1207.pdf"
-vscode "vscodevim.vim"

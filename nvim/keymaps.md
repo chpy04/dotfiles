@@ -253,19 +253,6 @@ Leader: `Space` | Local leader: `\`
 | `<leader>gb` | n | Toggle line blame |
 | `<leader>gT` | n | Toggle git signs |
 
-#### OpenCode (opencode.nvim)
-
-| Key | Mode | Description |
-|-----|------|-------------|
-| `<leader>aoa` | n/v | Ask with `@this:` (submit immediately) |
-| `<leader>aoe` | n/v | Select/execute OpenCode action |
-| `<leader>aot` | n/t | Toggle OpenCode UI |
-| `<leader>aor` | n/v | Add range to prompt (`@this`) |
-| `<leader>aol` | n | Add current line to prompt (`@this`) |
-| `<leader>aok` | n | Scroll OpenCode session up |
-| `<leader>aoj` | n | Scroll OpenCode session down |
-| `Alt-a` | n/i | Snacks picker: send selection to OpenCode |
-
 #### Copilot
 
 | Key | Mode | Description |
@@ -277,14 +264,6 @@ Leader: `Space` | Local leader: `\`
 | `Alt-]` | i | Next suggestion |
 | `Alt-[` | i | Previous suggestion |
 | `Ctrl-]` | i | Dismiss suggestion |
-
-#### 99
-
-| Key | Mode | Description |
-|-----|------|-------------|
-| `<leader>a9l` | n | View Logs |
-| `<leader>a9s` | n | Stop Request |
-| `<leader>a9v` | n | Send selection |
 
 #### LazyGit
 
@@ -306,61 +285,6 @@ Leader: `Space` | Local leader: `\`
 | `<leader>dcb` | n | Conflict: choose base |
 | `<leader>dca` | n | Conflict: choose all |
 | `dx` | n | Conflict: delete region |
-
-### Debug / DAP (`plugins/debug.lua`)
-
-#### Running & Stepping
-
-| Key | Mode | Description |
-|-----|------|-------------|
-| `<leader>dc` | n | Continue (prepare + run) |
-| `<leader>dn` | n | Step over |
-| `<leader>di` | n | Step into |
-| `<leader>do` | n | Step out |
-| `<leader>dC` | n | Run to cursor |
-| `<leader>dq` | n | Terminate session |
-
-#### Breakpoints
-
-| Key | Mode | Description |
-|-----|------|-------------|
-| `<leader>db` | n | Toggle breakpoint |
-| `<leader>dB` | n | Conditional breakpoint |
-| `<leader>dl` | n | Logpoint |
-
-#### Inspection & UI
-
-| Key | Mode | Description |
-|-----|------|-------------|
-| `<leader>dh` | n/v | Hover value |
-| `<leader>dr` | n | Toggle REPL |
-| `<leader>du` | n | Toggle DAP UI |
-
-#### Python-specific
-
-| Key | Mode | Description |
-|-----|------|-------------|
-| `<leader>ds` | n | Debug nearest test method |
-| `<leader>df` | n | Debug test class |
-| `<leader>de` | v | Debug selection |
-
-#### DAP Toggles
-
-| Key | Mode | Description |
-|-----|------|-------------|
-| `<leader>dtj` | n | Toggle justMyCode |
-| `<leader>dtv` | n | Toggle VSCode launch.json |
-
-### Java (`plugins/java.lua`)
-
-| Key | Mode | Description |
-|-----|------|-------------|
-| `<leader>jo` | n | Organize imports |
-| `<leader>jev` | n/v | Extract variable |
-| `<leader>jec` | n/v | Extract constant |
-| `<leader>jem` | n/v | Extract method |
-| `<leader>jtm` | n | Test nearest method |
-| `<leader>jtc` | n | Test class |
 
 ### Harpoon (`plugins/tools.lua`)
 
@@ -427,11 +351,9 @@ Leader: `Space` | Local leader: `\`
 | Prefix | Group |
 |--------|-------|
 | `<leader>a` | AI|
-| `<leader>d` | Debug |
 | `<leader>f` | Find |
 | `<leader>g` | Git |
 | `<leader>h` | Harpoon |
-| `<leader>j` | Java |
 | `<leader>l` | LSP |
 | `<leader>m` | Markdown |
 | `<leader>n` | Neo-tree |

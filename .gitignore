@@ -2,9 +2,6 @@
 .DS_Store
 Thumbs.db
 
-# Tmux plugins (managed by TPM at runtime)
-tmux/plugins/
-
 # Neovim generated files
 **/lazy-lock.json
 **/.luarc.json

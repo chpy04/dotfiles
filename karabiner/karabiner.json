@@ -4,13 +4,14 @@
             "complex_modifications": {
                 "rules": [
                     {
-                        "description": "Caps Lock to Escape on tap, Control on hold",
+                        "description": "Caps Lock: Control when held, Escape when tapped",
                         "manipulators": [
                             {
                                 "from": {
                                     "key_code": "caps_lock",
                                     "modifiers": { "optional": ["any"] }
                                 },
+                                "parameters": { "basic.to_if_alone_timeout_milliseconds": 300 },
                                 "to": [
                                     {
                                         "key_code": "left_control",
@@ -25,8 +26,7 @@
                 ]
             },
             "name": "Default profile",
-            "selected": true,
-            "virtual_hid_keyboard": { "keyboard_type_v2": "ansi" }
+            "selected": true
         }
     ]
 }

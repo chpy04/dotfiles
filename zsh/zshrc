@@ -1,23 +1,14 @@
-# Powerlevel10k instant prompt (top of file)
+# Powerlevel10k instant prompt (keep at top; anything that prints must go above this)
 if [[ -r "${XDG_CACHE_HOME:-$HOME/.cache}/p10k-instant-prompt-${(%):-%n}.zsh" ]]; then
   source "${XDG_CACHE_HOME:-$HOME/.cache}/p10k-instant-prompt-${(%):-%n}.zsh"
 fi
 
-export NVM_DIR="$HOME/.nvm"
-[ -s "$(brew --prefix nvm)/nvm.sh" ] && \. "$(brew --prefix nvm)/nvm.sh"
-[ -s "$(brew --prefix nvm)/etc/bash_completion.d/nvm" ] && \. "$(brew --prefix nvm)/etc/bash_completion.d/nvm"
+# Homebrew (login shells get this from .zprofile; this covers non-login shells)
+[[ -z "$HOMEBREW_PREFIX" ]] && eval "$(/opt/homebrew/bin/brew shellenv zsh)"
 
-export PATH="/opt/homebrew/bin:$PATH"
-
-
-export GITHUB_PERSONAL_ACCESS_TOKEN="$(security find-generic-password -a $USER -s github-pat -w 2>/dev/null)"
-
-# Prompt
-autoload -Uz promptinit
-promptinit
-prompt adam1
-
-setopt histignorealldups sharehistory
+export PATH="$HOME/.local/bin:$PATH"
+export EDITOR=nvim
+export VISUAL=nvim
 
 # ===== VIM MODE =====
 bindkey -v
@@ -66,6 +57,7 @@ bindkey -M viins '\ey' autosuggest-accept
 HISTSIZE=10000
 SAVEHIST=10000
 HISTFILE=~/.zsh_history
+setopt histignorealldups sharehistory
 
 # Completion
 autoload -Uz compinit
@@ -75,8 +67,6 @@ zstyle ':completion:*' auto-description 'specify: %d'
 zstyle ':completion:*' completer _expand _complete _correct _approximate
 zstyle ':completion:*' format 'Completing %d'
 zstyle ':completion:*' group-name ''
-zstyle ':completion:*' menu select=2
-zstyle ':completion:*:default' list-colors ${(s.:.)LS_COLORS}
 zstyle ':completion:*' list-colors ''
 zstyle ':completion:*' list-prompt %SAt %p: Hit TAB for more, or the character to insert%s
 zstyle ':completion:*' matcher-list '' 'm:{a-z}={A-Z}' 'm:{a-zA-Z}={A-Za-z}' 'r:|[._-]=* r:|=* l:|=*'
@@ -86,21 +76,19 @@ zstyle ':completion:*' use-compctl false
 zstyle ':completion:*' verbose true
 
 zstyle ':completion:*:*:kill:*:processes' list-colors '=(#b) #([0-9]#)*=0=01;31'
-zstyle ':completion:*:kill:*' command 'ps -u $USER -o pid,%cpu,tty,cputime,cmd'
+zstyle ':completion:*:kill:*' command 'ps -u $USER -o pid,%cpu,tty,cputime,command'
 
 ### Aliases
-# macOS ls is BSD, use -G for color. If you install coreutils, you can switch to gls.
 alias ls='ls -G'
 alias ll='ls -alF'
 alias la='ls -A'
 alias l='ls -CF'
 
-alias grep='grep --color=auto'  # works with BSD grep on macOS 14+
-alias fgrep='fgrep --color=auto'
-alias egrep='egrep --color=auto'
+alias grep='grep --color=auto'
 
 alias ..='cd ..'
 alias v='nvim .'
+alias dotfile='cd ~/dotfiles/'
 
 # Git
 alias g='git'
@@ -118,63 +106,21 @@ alias gc='git checkout'
 alias gcb='git checkout -b'
 alias gr='git restore'
 
-# Docker
-alias d='docker'
-alias dps='docker ps'
-alias dcu='docker compose up'
-alias dcub='docker compose up --build'
-alias dcd='docker compose down'
-
-# Common Directory Shortcuts
-alias fl='cd ~/NER/Finishline/'
-alias dotfile='cd ~/dotfiles/'
-alias mng='cd ~/NExT/MNG_Inventory_System/'
-
 # Claude Code
 alias cld='claude --dangerously-skip-permissions'
 
+# Plugins (Homebrew)
+[[ -f $HOMEBREW_PREFIX/share/zsh-autosuggestions/zsh-autosuggestions.zsh ]] &&
+  source $HOMEBREW_PREFIX/share/zsh-autosuggestions/zsh-autosuggestions.zsh
 
-# Scripts
-alias tn='tmux-cmd'
+# fzf: Ctrl-R history, Ctrl-T files, Alt-C cd, ** fuzzy completion
+command -v fzf >/dev/null 2>&1 && source <(fzf --zsh)
 
-export PATH="$HOME/.local/bin:$HOME/dotfiles/scripts:$PATH"
+# Powerlevel10k (run `p10k configure` to regenerate ~/.p10k.zsh)
+[[ -f $HOMEBREW_PREFIX/share/powerlevel10k/powerlevel10k.zsh-theme ]] &&
+  source $HOMEBREW_PREFIX/share/powerlevel10k/powerlevel10k.zsh-theme
+[[ -f ~/.p10k.zsh ]] && source ~/.p10k.zsh
 
-# Editor
-export EDITOR=/opt/homebrew/bin/nvim
-
-# Plugins installed via Homebrew
-# zsh-autosuggestions
-if [ -f /opt/homebrew/share/zsh-autosuggestions/zsh-autosuggestions.zsh ]; then
-  source /opt/homebrew/share/zsh-autosuggestions/zsh-autosuggestions.zsh
-fi
-# zsh-syntax-highlighting must be sourced at the end
-if [ -f /opt/homebrew/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh ]; then
-  source /opt/homebrew/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh
-fi
-
-# fzf integration (after installing fzf and running its install script)
-if [ -f ~/.fzf.zsh ]; then
-  source ~/.fzf.zsh
-fi
-
-# Powerlevel10k from Homebrew
-if [ -f /opt/homebrew/share/powerlevel10k/powerlevel10k.zsh-theme ]; then
-  source /opt/homebrew/share/powerlevel10k/powerlevel10k.zsh-theme
-fi
-[[ ! -f ~/.p10k.zsh ]] || source ~/.p10k.zsh
-
-# thefuck
-if command -v thefuck >/dev/null 2>&1; then
-  eval "$(thefuck --alias)"
-fi
-
-# Neovim venv tools
-export PATH="$HOME/.venvs/nvim/bin:$PATH"
-export PATH="/opt/homebrew/opt/postgresql@16/bin:$PATH"
-
-# bun completions
-[ -s "/Users/chrispyle/.bun/_bun" ] && source "/Users/chrispyle/.bun/_bun"
-
-# bun
-export BUN_INSTALL="$HOME/.bun"
-export PATH="$BUN_INSTALL/bin:$PATH"
+# zsh-syntax-highlighting must be sourced last
+[[ -f $HOMEBREW_PREFIX/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh ]] &&
+  source $HOMEBREW_PREFIX/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh

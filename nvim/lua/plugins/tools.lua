@@ -294,11 +294,9 @@ return {
 
 			wk.add({
 				{ "<leader>a", group = "ai" },
-				{ "<leader>d", group = "debug" },
 				{ "<leader>f", group = "find" },
 				{ "<leader>g", group = "git" },
 				{ "<leader>h", group = "harpoon" },
-				{ "<leader>j", group = "java" },
 				{ "<leader>l", group = "lsp" },
 				{ "<leader>m", group = "markdown" },
 				{ "<leader>n", group = "neo-tree" },
@@ -402,27 +400,6 @@ return {
 					map({ "n", "v" }, "<leader>mt", "<cmd>MkdnToggleToDo<cr>", "Markdown: toggle todo")
 				end,
 			})
-		end,
-	},
-
-	----------------------------------------------------------------------
-	-- VimTex
-	----------------------------------------------------------------------
-	{
-		"lervag/vimtex",
-		ft = { "tex" },
-		init = function()
-			vim.g.vimtex_view_method = "general" -- use default
-			vim.g.vimtex_compiler_method = "latexmk" -- default, explicit here
-			vim.g.vimtex_quickfix_mode = 0 -- don't auto-open quickfix on warnings
-			vim.g.vimtex_compiler_progname = "nvr" -- for inverse search (requires neovim-remote)
-
-			-- Put all generated files (including PDF) into ./out
-			vim.g.vimtex_compiler_latexmk = {
-				continuous = 1,
-				out_dir = "out",
-				options = { "-pdf", "-interaction=nonstopmode", "-synctex=1" },
-			}
 		end,
 	},
 }

@@ -13,13 +13,11 @@ return {
 					"pyright",
 					"typescript-language-server",
 					"zls",
-					"ltex-ls",
 					"marksman",
 					"clangd",
 					"rust-analyzer",
 					"gopls",
 					"bash-language-server",
-					"jdtls",
 					"prisma-language-server",
 				-- Formatters
 					"stylua",
@@ -27,19 +25,10 @@ return {
 					"shfmt",
 					"goimports",
 					"gofumpt",
-					"google-java-format",
-					"latexindent",
                     -- Linters
                     "ruff",
 					"eslint_d",
                     "shellcheck",
-					-- DAP adapters
-					"debugpy",
-					"delve",
-					"js-debug-adapter",
-					"codelldb",
-					"java-debug-adapter",
-					"java-test",
 				},
 			},
 		},
@@ -227,20 +216,6 @@ return {
 			},
 		})
 
-		-- LTEX
-		vim.lsp.config("ltex", {
-			filetypes = { "tex", "latex", "bib" },
-			root_markers = { ".git" },
-			settings = {
-				ltex = {
-					checkFrequency = "save",
-					language = "en-US",
-					enabled = { "tex", "latex", "bib" },
-					disabledRules = { ["en-US"] = { "WHITESPACE_RULE" } },
-				},
-			},
-		})
-
 		-- Zig
 		vim.lsp.config("zls", {
 			filetypes = { "zig", "zir" },
@@ -321,7 +296,6 @@ return {
 			"pyright",
 			"ts_ls",
 			"zls",
-			"ltex",
 			"marksman",
 			"clangd",
 			"rust_analyzer",

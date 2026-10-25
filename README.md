@@ -1,111 +1,53 @@
-# Dotfiles
+# dotfiles
 
-Cross-platform configuration files for macOS and Linux. Built around a consistent philosophy: vi-keybindings everywhere, tiling window management, and a terminal-first workflow.
+macOS dev environment: AeroSpace, Karabiner, Ghostty, herdr, Neovim, zsh, and Homebrew.
+Vi keys everywhere, tiling windows, terminal-first.
 
-## What's Included
+| Tool | Config | Linked to |
+|------|--------|-----------|
+| zsh + Powerlevel10k | [zsh/zshrc](zsh/zshrc), [zsh/zprofile](zsh/zprofile) | `~/.zshrc`, `~/.zprofile` |
+| Neovim | [nvim/](nvim) ([keymaps](nvim/keymaps.md)) | `~/.config/nvim` |
+| Ghostty | [ghostty/config](ghostty/config) | `~/.config/ghostty/config` |
+| herdr | [herdr/config.toml](herdr/config.toml) | `~/.config/herdr/config.toml` |
+| AeroSpace | [aerospace/aerospace.toml](aerospace/aerospace.toml) | `~/.aerospace.toml` |
+| Karabiner-Elements | [karabiner/](karabiner) | `~/.config/karabiner` (whole dir) |
+| Homebrew | [brew/Brewfile](brew/Brewfile) | — |
 
-| Tool | macOS | Linux | Docs |
-|------|:-----:|:-----:|------|
-| **Neovim** | [config](nvim) | [config](nvim) | [docs/neovim.md](docs/neovim.md) |
-| **Tmux** | [config](tmux/tmux.conf) | [config](tmux/tmux.conf) | [docs/tmux.md](docs/tmux.md) |
-| **Zsh** | [config](zsh/zshrc.mac) | [config](zsh/zshrc.linux) | [docs/shell.md](docs/shell.md) |
-| **Kitty** | [config](kitty) | [config](kitty) | - |
-| **AeroSpace** (tiling WM) | [config](aerospace/aerospace.toml) | - | [docs/window-management.md](docs/window-management.md) |
-| **i3** (tiling WM) | - | [config](i3) | [docs/window-management.md](docs/window-management.md) |
-| **Karabiner** (key remap) | [config](karabiner) | - | - |
-| **Rofi** (launcher) | - | [config](rofi) | [docs/window-management.md](docs/window-management.md) |
-
-Full keybinding reference: [docs/keymaps.md](docs/keymaps.md)
-
-## Design Principles
-
-- **Vi-mode everywhere** -- zsh, tmux, window managers, and Neovim all use h/j/k/l navigation
-- **Tiling window management** -- i3 on Linux, AeroSpace on macOS, with matching keybindings
-- **Catppuccin Mocha** as the primary theme across tmux and terminal, with a persistent theme picker in Neovim
-- **Platform parity** -- both setups share the same muscle memory despite different tools
-
-## Prerequisites
-
-### macOS
-
-| Tool | Install |
-|------|---------|
-| [Homebrew](https://brew.sh) | `/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"` |
-| Neovim | `brew install neovim` |
-| Tmux | `brew install tmux` |
-| Kitty | `brew install --cask kitty` |
-| AeroSpace | `brew install --cask nikitabobko/tap/aerospace` |
-| Karabiner-Elements | `brew install --cask karabiner-elements` |
-| Zsh plugins | `brew install zsh-autosuggestions zsh-syntax-highlighting powerlevel10k` |
-| fzf | `brew install fzf && $(brew --prefix)/opt/fzf/install` |
-| thefuck | `brew install thefuck` |
-
-### Linux
-
-| Tool | Install (Debian/Ubuntu) |
-|------|-------------------------|
-| Neovim | `sudo snap install nvim --classic` or build from source |
-| Tmux | `sudo apt install tmux` |
-| Kitty | `sudo apt install kitty` |
-| i3 | `sudo apt install i3` |
-| i3blocks | `sudo apt install i3blocks` |
-| Rofi | `sudo apt install rofi` |
-| Zsh | `sudo apt install zsh && chsh -s $(which zsh)` |
-| fzf | `sudo apt install fzf` |
-| Powerlevel10k | `git clone --depth=1 https://github.com/romkatv/powerlevel10k.git ~/.zsh/powerlevel10k` |
-
-## Installation
+## New machine
 
 ```bash
-git clone https://github.com/ekremarmagankarakas/dotfiles.git ~/dotfiles
+# 1. Homebrew
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+
+# 2. This repo
+git clone git@github.com:chpy04/dotfiles.git ~/dotfiles
 cd ~/dotfiles
 
-# Preview what will be linked (recommended first)
-./install.sh --dry-run
-
-# Install (auto-detects platform)
-./install.sh
-
-# Or specify platform explicitly
-./install.sh mac
-./install.sh linux
+# 3. Packages + symlinks (existing files are moved to *.backup.<timestamp>)
+./install.sh --dry-run   # preview
+./install.sh --brew
 ```
 
-The install script:
-- Creates symlinks from your `~/.config/` to this repo
-- Backs up any existing files (saved with `.backup.*` suffix)
-- Skips files that are already correctly linked
-- Installs [TPM](https://github.com/tmux-plugins/tpm) for tmux plugin management
+Then:
 
-After installation, open tmux and press `Ctrl-s` + `I` to install tmux plugins.
+- **herdr** isn't in Homebrew; install it separately (binary goes in `~/.local/bin`).
+- **Powerlevel10k**: open a new shell and run through `p10k configure`. To track the result,
+  `mv ~/.p10k.zsh ~/dotfiles/zsh/p10k.zsh && ./install.sh`.
+- **Neovim**: first launch installs plugins (lazy.nvim) and LSP servers/formatters (Mason).
+- **AeroSpace / Karabiner**: grant Accessibility / Input Monitoring permissions when macOS asks.
 
-## Customization
+## Keys at a glance
 
-Some settings are intentionally machine-specific. If you fork/clone this repo, search for these and update them:
+- **Caps Lock**: Escape on tap, Control on hold (Karabiner)
+- **AeroSpace** (`alt`): `h/j/k/l` focus, `shift-h/j/k/l` move, `1-9`/`a-z` workspace,
+  `shift-<ws>` send window, `tab` last workspace, `shift-;` service mode
+- **herdr**: prefix `ctrl-s`
+- **zsh**: vi mode (cursor changes shape), `ctrl-r` fzf history, `ctrl-t` fzf files, `alt-y` accept suggestion
+- **Neovim**: leader `space`; see [nvim/keymaps.md](nvim/keymaps.md)
 
-- search and replace `ekrem-armagan-karakas` and `ekremarmagankarakas` with your own username
-- `zsh/zshrc.linux`: `BROWSER` and `zen` (expects `~/AppImages/zen_browser.appimage`)
-- `i3/config`: browser keybind (expects `~/AppImages/zen_browser.appimage`)
-- `i3/config`: file explorer keybind (expects `Thunar`)
-- `nvim/lua/plugins/telescope.lua`: Has hardcoded dir locations to search from. Update these to fit your own setup.
-- `zsh/zshrc.mac`: optional `antigravity` PATH entry
-- `aerospace/aerospace.toml`: browser keybind (expects `Brave`)
-- `aerospace/aerospace.toml`: file explorer keybind (expects `Commander One`)
+## Adding things
 
-## Highlights
+- New brew package: add it to `brew/Brewfile`, then `brew bundle --file=~/dotfiles/brew/Brewfile`.
+- New config: put it in a folder here and add a `link_file` line to `install_links` in `install.sh`.
 
-### Neovim
-
-A full IDE-like setup built on Lazy.nvim with LSP support for 10+ languages, DAP debugging, and a persistent theme picker that lets you switch between 12 colorschemes. See [docs/neovim.md](docs/neovim.md) for the full breakdown.
-
-### Window Management
-
-Both platforms use tiling WMs with nearly identical keybindings. `Alt+h/j/k/l` to focus, `Alt+Shift+h/j/k/l` to move, `Alt+1-9` for workspaces. See [docs/window-management.md](docs/window-management.md).
-
-### Shell
-
-Zsh with Powerlevel10k, vi-mode with cursor shape changes, and a shared set of git/docker aliases across both platforms. See [docs/shell.md](docs/shell.md).
-
-## License
-
-MIT
+Originally forked from [ekremarmagankarakas/dotfiles](https://github.com/ekremarmagankarakas/dotfiles).

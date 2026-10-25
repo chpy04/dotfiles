@@ -32,9 +32,6 @@ return {
 			sh = { "shfmt" },
 			markdown = { "prettier" },
 			r = { "r_styler" },
-			java = { "google-java-format" },
-			tex = { "latexindent" },
-			latex = { "latexindent" },
 		},
 		default_format_opts = {
 			lsp_format = "fallback",
@@ -65,11 +62,6 @@ return {
 			shfmt = {
 				prepend_args = { "-i", "4" },
 			},
-			["google-java-format"] = {
-				command = "google-java-format",
-				args = { "-" },
-				stdin = true,
-			},
 			r_styler = {
 				command = "Rscript",
 				args = {
@@ -78,12 +70,6 @@ return {
 					"$FILENAME",
 				},
 				stdin = false,
-			},
-			latexindent = {
-				command = "latexindent",
-				args = { "-" },
-				stdin = true,
-				timeout_ms = 4000,
 			},
 		},
 	},
