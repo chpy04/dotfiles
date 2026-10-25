@@ -3,7 +3,6 @@
 Thumbs.db
 
 # Neovim generated files
-**/lazy-lock.json
 **/.luarc.json
 
 # Backup files

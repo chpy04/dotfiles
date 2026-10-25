@@ -117,6 +117,9 @@ install_links() {
         link_file "$DOTFILES_DIR/zsh/p10k.zsh" "$HOME/.p10k.zsh"
     fi
 
+    # Git
+    link_file "$DOTFILES_DIR/git/gitconfig" "$HOME/.gitconfig"
+
     # Neovim
     link_file "$DOTFILES_DIR/nvim" "$config_dir/nvim"
 

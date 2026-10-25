@@ -5,7 +5,8 @@ Vi keys everywhere, tiling windows, terminal-first.
 
 | Tool | Config | Linked to |
 |------|--------|-----------|
-| zsh + Powerlevel10k | [zsh/zshrc](zsh/zshrc), [zsh/zprofile](zsh/zprofile) | `~/.zshrc`, `~/.zprofile` |
+| zsh + Powerlevel10k | [zsh/zshrc](zsh/zshrc), [zsh/zprofile](zsh/zprofile), [zsh/p10k.zsh](zsh/p10k.zsh) | `~/.zshrc`, `~/.zprofile`, `~/.p10k.zsh` |
+| Git | [git/gitconfig](git/gitconfig) | `~/.gitconfig` |
 | Neovim | [nvim/](nvim) ([keymaps](nvim/keymaps.md)) | `~/.config/nvim` |
 | Ghostty | [ghostty/config](ghostty/config) | `~/.config/ghostty/config` |
 | herdr | [herdr/config.toml](herdr/config.toml) | `~/.config/herdr/config.toml` |
@@ -31,9 +32,8 @@ cd ~/dotfiles
 Then:
 
 - **herdr** isn't in Homebrew; install it separately (binary goes in `~/.local/bin`).
-- **Powerlevel10k**: open a new shell and run through `p10k configure`. To track the result,
-  `mv ~/.p10k.zsh ~/dotfiles/zsh/p10k.zsh && ./install.sh`.
-- **Neovim**: first launch installs plugins (lazy.nvim) and LSP servers/formatters (Mason).
+- **Powerlevel10k**: prompt config is tracked in `zsh/p10k.zsh`; run `p10k configure` to change it.
+- **Neovim**: first launch installs plugins at the versions pinned in `nvim/lazy-lock.json` (lazy.nvim) and LSP servers/formatters (Mason).
 - **AeroSpace / Karabiner**: grant Accessibility / Input Monitoring permissions when macOS asks.
 
 ## Keys at a glance
