@@ -1,0 +1,470 @@
+{
+  "type": "flowchart",
+  "title": "Auth session refresh flow",
+  "direction": "TB",
+  "nodes": [
+    {
+      "id": "start",
+      "label": "Request arrives",
+      "shape": "terminal",
+      "code": {
+        "path": "src/server/middleware.ts",
+        "line": 12,
+        "anchor": "export async function authMiddleware"
+      }
+    },
+    {
+      "id": "read_cookie",
+      "label": "Read session cookie",
+      "shape": "io",
+      "code": {
+        "path": "src/auth/session.ts",
+        "line": 40,
+        "anchor": "req.cookies.get"
+      }
+    },
+    {
+      "id": "has_cookie",
+      "label": "Cookie present?",
+      "shape": "decision",
+      "code": {
+        "path": "src/auth/session.ts",
+        "line": 44,
+        "anchor": "if (!cookie)"
+      }
+    },
+    {
+      "id": "anon",
+      "label": "Treat as anonymous",
+      "shape": "process",
+      "code": {
+        "path": "src/auth/session.ts",
+        "line": 47
+      }
+    },
+    {
+      "id": "verify_sig",
+      "label": "Verify cookie signature",
+      "shape": "subroutine",
+      "code": {
+        "path": "src/auth/crypto.ts",
+        "line": 22,
+        "anchor": "verifyHmac("
+      },
+      "details": [
+        {
+          "title": "Algorithm",
+          "body": "HMAC-SHA256 with rotating keys; the previous key is accepted for 24h."
+        }
+      ]
+    },
+    {
+      "id": "sig_ok",
+      "label": "Signature valid?",
+      "shape": "decision"
+    },
+    {
+      "id": "reject_tamper",
+      "label": "Reject: tampered cookie",
+      "shape": "terminal",
+      "code": {
+        "path": "src/auth/session.ts",
+        "line": 61,
+        "anchor": "throw new AuthError('tampered')"
+      }
+    },
+    {
+      "id": "load_session",
+      "label": "Load session from store",
+      "shape": "database",
+      "code": {
+        "path": "src/auth/store.ts",
+        "line": 30,
+        "anchor": "redis.get"
+      },
+      "details": [
+        {
+          "title": "Data model",
+          "body": "Session { id, userId, expiresAt, refreshToken, deviceId }"
+        }
+      ]
+    },
+    {
+      "id": "found",
+      "label": "Session found?",
+      "shape": "decision"
+    },
+    {
+      "id": "expired_session",
+      "label": "Session evicted: re-login",
+      "shape": "terminal",
+      "code": {
+        "path": "src/auth/session.ts",
+        "line": 88
+      }
+    },
+    {
+      "id": "check",
+      "label": "Token expired?",
+      "shape": "decision",
+      "code": {
+        "path": "src/auth/session.ts",
+        "line": 142,
+        "anchor": "token.expiresAt <"
+      },
+      "details": [
+        {
+          "title": "Edge case",
+          "body": "Uses client clock; skew > 30s causes early refresh"
+        }
+      ]
+    },
+    {
+      "id": "near_expiry",
+      "label": "Within refresh window?",
+      "shape": "decision",
+      "code": {
+        "path": "src/auth/session.ts",
+        "line": 150,
+        "anchor": "REFRESH_WINDOW_MS"
+      }
+    },
+    {
+      "id": "attach",
+      "label": "Attach user to request",
+      "shape": "process",
+      "code": {
+        "path": "src/server/middleware.ts",
+        "line": 58
+      }
+    },
+    {
+      "id": "lock",
+      "label": "Acquire refresh lock",
+      "shape": "subroutine",
+      "code": {
+        "path": "src/auth/refresh.ts",
+        "line": 9,
+        "anchor": "withRefreshLock"
+      },
+      "details": [
+        {
+          "title": "Why",
+          "body": "Prevents a thundering herd of parallel refreshes for one session."
+        }
+      ]
+    },
+    {
+      "id": "got_lock",
+      "label": "Lock acquired?",
+      "shape": "decision"
+    },
+    {
+      "id": "wait_lock",
+      "label": "Wait for in-flight refresh",
+      "shape": "process",
+      "code": {
+        "path": "src/auth/refresh.ts",
+        "line": 21
+      }
+    },
+    {
+      "id": "refresh",
+      "label": "Call /token/refresh",
+      "shape": "io",
+      "code": {
+        "path": "src/auth/refresh.ts",
+        "line": 18,
+        "anchor": "fetch(`${AUTH_URL}/token/refresh`"
+      }
+    },
+    {
+      "id": "refresh_ok",
+      "label": "Refresh succeeded?",
+      "shape": "decision"
+    },
+    {
+      "id": "retry",
+      "label": "Retry attempts left?",
+      "shape": "decision",
+      "code": {
+        "path": "src/auth/refresh.ts",
+        "line": 44,
+        "anchor": "attempt <"
+      }
+    },
+    {
+      "id": "backoff",
+      "label": "Exponential backoff",
+      "shape": "process",
+      "code": {
+        "path": "src/auth/refresh.ts",
+        "line": 47,
+        "anchor": "await sleep("
+      }
+    },
+    {
+      "id": "revoked",
+      "label": "Refresh token revoked?",
+      "shape": "decision"
+    },
+    {
+      "id": "revoke_session",
+      "label": "Delete session",
+      "shape": "database",
+      "code": {
+        "path": "src/auth/store.ts",
+        "line": 72,
+        "anchor": "redis.del"
+      }
+    },
+    {
+      "id": "force_login",
+      "label": "Redirect to /login",
+      "shape": "terminal",
+      "code": {
+        "path": "src/auth/session.ts",
+        "line": 101
+      }
+    },
+    {
+      "id": "rotate",
+      "label": "Rotate refresh token",
+      "shape": "process",
+      "code": {
+        "path": "src/auth/refresh.ts",
+        "line": 63,
+        "anchor": "rotateRefreshToken"
+      }
+    },
+    {
+      "id": "save",
+      "label": "Persist new session",
+      "shape": "database",
+      "code": {
+        "path": "src/auth/store.ts",
+        "line": 50,
+        "anchor": "redis.set"
+      }
+    },
+    {
+      "id": "set_cookie",
+      "label": "Set-Cookie on response",
+      "shape": "io",
+      "code": {
+        "path": "src/auth/session.ts",
+        "line": 120,
+        "anchor": "res.cookies.set"
+      }
+    },
+    {
+      "id": "audit",
+      "label": "Emit audit event",
+      "shape": "subroutine",
+      "code": {
+        "path": "src/audit/emit.ts",
+        "line": 14
+      },
+      "details": [
+        {
+          "title": "Event",
+          "body": "session.refreshed { sessionId, deviceId, reason }"
+        }
+      ]
+    },
+    {
+      "id": "metrics",
+      "label": "Record refresh latency",
+      "shape": "process"
+    },
+    {
+      "id": "continue",
+      "label": "Continue request",
+      "shape": "terminal",
+      "code": {
+        "path": "src/server/middleware.ts",
+        "line": 70,
+        "anchor": "return next()"
+      }
+    },
+    {
+      "id": "serve_stale",
+      "label": "Serve with stale token",
+      "shape": "process",
+      "details": [
+        {
+          "title": "Edge case",
+          "body": "Only when the auth service is down and the token is < 5 min past expiry."
+        }
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "from": "start",
+      "to": "read_cookie"
+    },
+    {
+      "from": "read_cookie",
+      "to": "has_cookie"
+    },
+    {
+      "from": "has_cookie",
+      "to": "anon",
+      "label": "no"
+    },
+    {
+      "from": "has_cookie",
+      "to": "verify_sig",
+      "label": "yes"
+    },
+    {
+      "from": "anon",
+      "to": "continue"
+    },
+    {
+      "from": "verify_sig",
+      "to": "sig_ok"
+    },
+    {
+      "from": "sig_ok",
+      "to": "reject_tamper",
+      "label": "no"
+    },
+    {
+      "from": "sig_ok",
+      "to": "load_session",
+      "label": "yes"
+    },
+    {
+      "from": "load_session",
+      "to": "found"
+    },
+    {
+      "from": "found",
+      "to": "expired_session",
+      "label": "no"
+    },
+    {
+      "from": "found",
+      "to": "check",
+      "label": "yes"
+    },
+    {
+      "from": "check",
+      "to": "near_expiry",
+      "label": "no"
+    },
+    {
+      "from": "check",
+      "to": "lock",
+      "label": "yes"
+    },
+    {
+      "from": "near_expiry",
+      "to": "attach",
+      "label": "no"
+    },
+    {
+      "from": "near_expiry",
+      "to": "lock",
+      "label": "yes",
+      "style": "dashed"
+    },
+    {
+      "from": "lock",
+      "to": "got_lock"
+    },
+    {
+      "from": "got_lock",
+      "to": "wait_lock",
+      "label": "no"
+    },
+    {
+      "from": "got_lock",
+      "to": "refresh",
+      "label": "yes"
+    },
+    {
+      "from": "wait_lock",
+      "to": "load_session",
+      "style": "dashed"
+    },
+    {
+      "from": "refresh",
+      "to": "refresh_ok"
+    },
+    {
+      "from": "refresh_ok",
+      "to": "rotate",
+      "label": "yes"
+    },
+    {
+      "from": "refresh_ok",
+      "to": "retry",
+      "label": "no"
+    },
+    {
+      "from": "retry",
+      "to": "backoff",
+      "label": "yes"
+    },
+    {
+      "from": "backoff",
+      "to": "refresh"
+    },
+    {
+      "from": "retry",
+      "to": "revoked",
+      "label": "no"
+    },
+    {
+      "from": "revoked",
+      "to": "revoke_session",
+      "label": "yes"
+    },
+    {
+      "from": "revoked",
+      "to": "serve_stale",
+      "label": "no"
+    },
+    {
+      "from": "revoke_session",
+      "to": "force_login"
+    },
+    {
+      "from": "serve_stale",
+      "to": "attach",
+      "style": "dashed"
+    },
+    {
+      "from": "rotate",
+      "to": "save"
+    },
+    {
+      "from": "save",
+      "to": "set_cookie"
+    },
+    {
+      "from": "set_cookie",
+      "to": "audit"
+    },
+    {
+      "from": "set_cookie",
+      "to": "metrics"
+    },
+    {
+      "from": "audit",
+      "to": "attach"
+    },
+    {
+      "from": "metrics",
+      "to": "attach",
+      "style": "dashed"
+    },
+    {
+      "from": "attach",
+      "to": "continue"
+    }
+  ]
+}

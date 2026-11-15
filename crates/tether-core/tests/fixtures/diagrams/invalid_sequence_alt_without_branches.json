@@ -1,0 +1,35 @@
+{
+  "type": "sequence",
+  "title": "S",
+  "participants": [
+    {
+      "id": "a",
+      "label": "A"
+    },
+    {
+      "id": "b",
+      "label": "B"
+    }
+  ],
+  "items": [
+    {
+      "type": "message",
+      "from": "a",
+      "to": "b",
+      "label": "hi"
+    },
+    {
+      "type": "group",
+      "kind": "alt",
+      "label": "c",
+      "items": [
+        {
+          "type": "message",
+          "from": "a",
+          "to": "b",
+          "label": "1"
+        }
+      ]
+    }
+  ]
+}

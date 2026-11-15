@@ -1,0 +1,30 @@
+{
+  "type": "sequence",
+  "title": "S",
+  "participants": [
+    {
+      "id": "a",
+      "label": "A"
+    },
+    {
+      "id": "b",
+      "label": "B"
+    }
+  ],
+  "items": [
+    {
+      "type": "message",
+      "from": "a",
+      "to": "b",
+      "label": "hi"
+    },
+    {
+      "type": "note",
+      "over": [
+        "a",
+        "nope"
+      ],
+      "text": "t"
+    }
+  ]
+}

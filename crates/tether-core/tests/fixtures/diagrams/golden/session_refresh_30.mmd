@@ -1,0 +1,67 @@
+flowchart TD
+    start(["Request arrives"])
+    read_cookie[/"Read session cookie"/]
+    has_cookie{"Cookie present?"}
+    anon["Treat as anonymous"]
+    verify_sig[["Verify cookie signature"]]
+    sig_ok{"Signature valid?"}
+    reject_tamper(["Reject: tampered cookie"])
+    load_session[("Load session from store")]
+    found{"Session found?"}
+    expired_session(["Session evicted: re-login"])
+    check{"Token expired?"}
+    near_expiry{"Within refresh window?"}
+    attach["Attach user to request"]
+    lock[["Acquire refresh lock"]]
+    got_lock{"Lock acquired?"}
+    wait_lock["Wait for in-flight refresh"]
+    refresh[/"Call /token/refresh"/]
+    refresh_ok{"Refresh succeeded?"}
+    retry{"Retry attempts left?"}
+    backoff["Exponential backoff"]
+    revoked{"Refresh token revoked?"}
+    revoke_session[("Delete session")]
+    force_login(["Redirect to /login"])
+    rotate["Rotate refresh token"]
+    save[("Persist new session")]
+    set_cookie[/"Set-Cookie on response"/]
+    audit[["Emit audit event"]]
+    metrics["Record refresh latency"]
+    continue(["Continue request"])
+    serve_stale["Serve with stale token"]
+    start --> read_cookie
+    read_cookie --> has_cookie
+    has_cookie -->|"no"| anon
+    has_cookie -->|"yes"| verify_sig
+    anon --> continue
+    verify_sig --> sig_ok
+    sig_ok -->|"no"| reject_tamper
+    sig_ok -->|"yes"| load_session
+    load_session --> found
+    found -->|"no"| expired_session
+    found -->|"yes"| check
+    check -->|"no"| near_expiry
+    check -->|"yes"| lock
+    near_expiry -->|"no"| attach
+    near_expiry -.->|"yes"| lock
+    lock --> got_lock
+    got_lock -->|"no"| wait_lock
+    got_lock -->|"yes"| refresh
+    wait_lock -.-> load_session
+    refresh --> refresh_ok
+    refresh_ok -->|"yes"| rotate
+    refresh_ok -->|"no"| retry
+    retry -->|"yes"| backoff
+    backoff --> refresh
+    retry -->|"no"| revoked
+    revoked -->|"yes"| revoke_session
+    revoked -->|"no"| serve_stale
+    revoke_session --> force_login
+    serve_stale -.-> attach
+    rotate --> save
+    save --> set_cookie
+    set_cookie --> audit
+    set_cookie --> metrics
+    audit --> attach
+    metrics -.-> attach
+    attach --> continue

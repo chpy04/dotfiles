@@ -1,0 +1,15 @@
+[package]
+name = "tether"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "tether"
+path = "src/main.rs"
+
+[dependencies]
+tether-core = { path = "../tether-core" }
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+clap.workspace = true

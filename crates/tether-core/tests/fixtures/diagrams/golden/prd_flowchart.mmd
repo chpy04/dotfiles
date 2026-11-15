@@ -1,0 +1,6 @@
+flowchart TD
+    check{"Token expired?"}
+    refresh["Call /token/refresh"]
+    ok["Continue request"]
+    check -->|"yes"| refresh
+    check -->|"no"| ok

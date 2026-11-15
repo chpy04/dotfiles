@@ -1,0 +1,187 @@
+{
+  "type": "sequence",
+  "title": "Login request",
+  "participants": [
+    {
+      "id": "browser",
+      "label": "Browser",
+      "kind": "actor"
+    },
+    {
+      "id": "api",
+      "label": "API",
+      "kind": "service"
+    },
+    {
+      "id": "auth",
+      "label": "AuthSvc",
+      "kind": "service"
+    },
+    {
+      "id": "db",
+      "label": "DB",
+      "kind": "database"
+    }
+  ],
+  "items": [
+    {
+      "type": "message",
+      "from": "browser",
+      "to": "api",
+      "label": "POST /login",
+      "code": {
+        "path": "src/api/login.ts",
+        "line": 14,
+        "anchor": "router.post('/login'"
+      }
+    },
+    {
+      "type": "message",
+      "from": "api",
+      "to": "auth",
+      "label": "verify(email, pw)",
+      "code": {
+        "path": "src/auth/verify.ts",
+        "line": 31,
+        "anchor": "export async function verify"
+      },
+      "details": [
+        {
+          "title": "Data model",
+          "body": "User { id, email, pw_hash, mfa }"
+        },
+        {
+          "title": "Edge case",
+          "body": "locked accounts return 423, not 401"
+        }
+      ]
+    },
+    {
+      "type": "message",
+      "from": "auth",
+      "to": "db",
+      "label": "SELECT user",
+      "code": {
+        "path": "src/auth/user_repo.ts",
+        "line": 56,
+        "anchor": "SELECT * FROM users"
+      }
+    },
+    {
+      "type": "message",
+      "id": "db_ret",
+      "from": "db",
+      "to": "auth",
+      "label": "user row",
+      "kind": "return"
+    },
+    {
+      "type": "note",
+      "over": [
+        "auth"
+      ],
+      "text": "bcrypt compare, cost 12",
+      "details": [
+        {
+          "title": "Perf",
+          "body": "About 250ms on prod hardware; runs on a worker thread."
+        }
+      ]
+    },
+    {
+      "type": "group",
+      "kind": "alt",
+      "label": "Credentials",
+      "branches": [
+        {
+          "label": "valid",
+          "items": [
+            {
+              "type": "message",
+              "from": "auth",
+              "to": "api",
+              "label": "session",
+              "kind": "return",
+              "code": {
+                "path": "src/auth/session.ts",
+                "line": 88,
+                "anchor": "createSession("
+              }
+            },
+            {
+              "type": "message",
+              "from": "api",
+              "to": "browser",
+              "label": "200 + cookie",
+              "kind": "return"
+            }
+          ]
+        },
+        {
+          "label": "account locked",
+          "items": [
+            {
+              "type": "message",
+              "from": "auth",
+              "to": "api",
+              "label": "locked",
+              "kind": "return"
+            },
+            {
+              "type": "message",
+              "from": "api",
+              "to": "browser",
+              "label": "423 Locked",
+              "kind": "return"
+            }
+          ]
+        },
+        {
+          "label": "invalid",
+          "items": [
+            {
+              "type": "message",
+              "from": "api",
+              "to": "browser",
+              "label": "401 Unauthorized",
+              "kind": "return"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "message",
+      "from": "api",
+      "to": "db",
+      "label": "INSERT audit_log",
+      "kind": "async"
+    },
+    {
+      "type": "group",
+      "kind": "opt",
+      "label": "MFA enabled",
+      "items": [
+        {
+          "type": "message",
+          "from": "api",
+          "to": "browser",
+          "label": "302 /mfa"
+        }
+      ]
+    },
+    {
+      "type": "group",
+      "kind": "loop",
+      "label": "until verified",
+      "items": [
+        {
+          "type": "message",
+          "from": "browser",
+          "to": "api",
+          "label": "POST /mfa"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,46 @@
+{
+  "type": "flowchart",
+  "title": "Session refresh",
+  "nodes": [
+    {
+      "id": "check",
+      "label": "Token expired?",
+      "shape": "decision",
+      "code": {
+        "path": "src/auth/session.ts",
+        "line": 142,
+        "anchor": "token.expiresAt <"
+      },
+      "details": [
+        {
+          "title": "Edge case",
+          "body": "Uses client clock; skew > 30s causes early refresh"
+        }
+      ]
+    },
+    {
+      "id": "refresh",
+      "label": "Call /token/refresh",
+      "code": {
+        "path": "src/auth/refresh.ts",
+        "line": 18
+      }
+    },
+    {
+      "id": "ok",
+      "label": "Continue request"
+    }
+  ],
+  "edges": [
+    {
+      "from": "check",
+      "to": "refresh",
+      "label": "yes"
+    },
+    {
+      "from": "check",
+      "to": "ok",
+      "label": "no"
+    }
+  ]
+}
