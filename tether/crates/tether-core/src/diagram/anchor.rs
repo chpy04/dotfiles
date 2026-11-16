@@ -103,6 +103,7 @@ mod tests {
             line,
             end_line: None,
             anchor: anchor.map(Into::into),
+            diff: None,
         }
     }
 

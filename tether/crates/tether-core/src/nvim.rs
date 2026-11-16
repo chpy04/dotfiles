@@ -326,10 +326,36 @@ pub fn exec_lua(sock: &Path, code: &str, args: serde_json::Value, timeout: Durat
     rpc_call(sock, "nvim_exec_lua", serde_json::json!([code, args]), timeout)
 }
 
-/// Lua for the jump (recipe from `spike/nvim-jump.sh`, plus an optional line-range highlight).
-/// Args: `[abs_file, line, end_line_or_null]`. Returns `"<file as nvim knows it>:<line>"`.
+/// Lua for the jump (recipe from `spike/nvim-jump.sh`, plus an optional line-range highlight and an
+/// optional diff against a git revision).
+/// Args: `[abs_file, line, end_line_or_null, diff_or_null]` with `diff` = [`DiffBase`].
+/// Returns `"<file as nvim knows it>:<line>"`.
+///
+/// The diff is scoped to this one jump: every jump first closes the diff view an earlier jump made
+/// (only windows tether marked, in the current tab page) and resets the gitsigns base it set on a
+/// buffer, so a jump without a diff always leaves the editor in its default state.
 pub const JUMP_LUA: &str = r#"
 local a = ...
+local d = a[4]
+if d == vim.NIL then d = nil end
+local function gitsigns() return package.loaded.gitsigns end
+-- undo the previous tether diff (ours only: marked windows and buffers)
+for _, w in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+  if vim.w[w].tether_diff_base and #vim.api.nvim_tabpage_list_wins(0) > 1 then pcall(vim.api.nvim_win_close, w, true) end
+end
+for _, w in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+  if vim.w[w].tether_diff_work then
+    pcall(vim.api.nvim_win_call, w, function() vim.cmd("diffoff") end)
+    vim.w[w].tether_diff_work = nil
+  end
+end
+for _, nr in ipairs(vim.api.nvim_list_bufs()) do
+  if vim.api.nvim_buf_is_loaded(nr) and vim.b[nr].tether_diff_rev then
+    vim.b[nr].tether_diff_rev = nil
+    local gs = gitsigns()
+    if gs then pcall(vim.api.nvim_buf_call, nr, function() gs.change_base(nil, false) end) end
+  end
+end
 local f = vim.fn.resolve(vim.fn.fnamemodify(a[1], ":p"))
 -- compare normalized names; vim.fn.bufnr(f) treats `[slug]` etc. as a glob pattern
 local b = -1
@@ -357,13 +383,69 @@ if type(e) == "number" and e > n then
     if vim.api.nvim_buf_is_valid(buf) then vim.api.nvim_buf_clear_namespace(buf, ns, 0, -1) end
   end, 4000)
 end
+if d then
+  local work = vim.api.nvim_get_current_win()
+  local ft = vim.bo[buf].filetype
+  vim.cmd("leftabove vertical new")
+  local base = vim.api.nvim_get_current_buf()
+  vim.bo[base].buftype = "nofile"
+  vim.bo[base].bufhidden = "wipe"
+  vim.bo[base].swapfile = false
+  local text = d.text
+  if text == vim.NIL then text = nil end
+  local lines = text and vim.split(text, "\n", { plain = true }) or {}
+  if text and lines[#lines] == "" then table.remove(lines) end
+  vim.api.nvim_buf_set_lines(base, 0, -1, false, lines)
+  vim.bo[base].modifiable = false
+  vim.bo[base].filetype = ft
+  pcall(vim.api.nvim_buf_set_name, base, ("tether://%s/%s"):format(d.rev, d.rel))
+  vim.w.tether_diff_base = true
+  vim.wo.winbar = text and ("%s (%s)"):format(d.rev, d.short) or ("%s (%s): file not in this revision"):format(d.rev, d.short)
+  vim.cmd("diffthis")
+  vim.api.nvim_set_current_win(work)
+  vim.w.tether_diff_work = true
+  vim.cmd("diffthis")
+  vim.b[buf].tether_diff_rev = d.rev
+  -- gitsigns (when installed) attaches to a fresh buffer asynchronously: retry until it has, and
+  -- stop if a newer jump replaced or cleared this diff meanwhile
+  local tries = 0
+  local function set_gs_base()
+    local gs = gitsigns()
+    if not gs or not vim.api.nvim_buf_is_valid(buf) or vim.b[buf].tether_diff_rev ~= d.rev then return end
+    if vim.b[buf].gitsigns_status_dict then
+      pcall(vim.api.nvim_buf_call, buf, function() gs.change_base(d.sha, false) end)
+    elseif tries < 20 then
+      tries = tries + 1
+      vim.defer_fn(set_gs_base, 150)
+    end
+  end
+  set_gs_base()
+  vim.api.nvim_win_set_cursor(work, { n, 0 })
+  vim.cmd("normal! zvzz")
+end
 return vim.fn.expand("%:p") .. ":" .. n
 "#;
 
+/// What to diff the opened file against (see [`JUMP_LUA`]).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct DiffBase {
+    /// The revision as given (`main`, `HEAD~3`, a sha); shown in the diff window.
+    pub rev: String,
+    /// The full commit it resolved to.
+    pub sha: String,
+    /// Abbreviated commit, for display.
+    pub short: String,
+    /// The file's path relative to the worktree root.
+    pub rel: String,
+    /// The file's content at `sha`; `None` when the file does not exist in that revision.
+    pub text: Option<String>,
+}
+
 /// Jump the Neovim listening on `sock` to `file:line` (file must be absolute). `end_line` highlights
 /// the range for a few seconds. Returns `"<path>:<line>"` as Neovim reports it.
-pub fn jump(sock: &Path, file: &Path, line: u32, end_line: Option<u32>) -> Result<String, NvimError> {
-    let args = serde_json::json!([[file.to_string_lossy(), line, end_line]]);
+/// `diff` opens a side-by-side diff against that revision (and closes any earlier tether diff).
+pub fn jump(sock: &Path, file: &Path, line: u32, end_line: Option<u32>, diff: Option<&DiffBase>) -> Result<String, NvimError> {
+    let args = serde_json::json!([[file.to_string_lossy(), line, end_line, diff]]);
     let v = exec_lua(sock, JUMP_LUA, args, RPC_TIMEOUT)?;
     v.as_str().map(str::to_string).ok_or_else(|| NvimError::Protocol(format!("unexpected jump result: {v}")))
 }
@@ -513,13 +595,13 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let sock = d.path().join("n.sock");
         let h = fake_nvim(&sock, serde_json::Value::Null, serde_json::json!("/x/a.ts:42"));
-        let r = jump(&sock, Path::new("/x/a.ts"), 42, Some(50)).unwrap();
+        let r = jump(&sock, Path::new("/x/a.ts"), 42, Some(50), None).unwrap();
         assert_eq!(r, "/x/a.ts:42");
         let req = h.join().unwrap();
         assert_eq!(req[0], 0);
         assert_eq!(req[2], "nvim_exec_lua");
         assert_eq!(req[3][0].as_str().unwrap(), JUMP_LUA);
-        assert_eq!(req[3][1], serde_json::json!([["/x/a.ts", 42, 50]]));
+        assert_eq!(req[3][1], serde_json::json!([["/x/a.ts", 42, 50, null]]));
 
         let sock2 = d.path().join("n2.sock");
         let h = fake_nvim(&sock2, serde_json::json!([0, "E5108: boom"]), serde_json::Value::Null);
@@ -557,12 +639,12 @@ mod tests {
             .spawn()
             .unwrap();
         assert!(wait_ready(&sock, Duration::from_secs(10)));
-        let at = jump(&sock, &file, 42, Some(44)).unwrap();
+        let at = jump(&sock, &file, 42, Some(44), None).unwrap();
         assert_eq!(at, format!("{}:42", file.display()));
         assert_eq!(position(&sock).unwrap(), format!("{}:42", file.display()));
         // second jump: same buffer, cursor moves; past EOF clamps
-        assert_eq!(jump(&sock, &file, 7, None).unwrap(), format!("{}:7", file.display()));
-        assert_eq!(jump(&sock, &file, 9999, None).unwrap(), format!("{}:100", file.display()));
+        assert_eq!(jump(&sock, &file, 7, None, None).unwrap(), format!("{}:7", file.display()));
+        assert_eq!(jump(&sock, &file, 9999, None, None).unwrap(), format!("{}:100", file.display()));
         // finding 11: `[slug]` is a glob to vim.fn.bufnr(); the buffer for `s/page.tsx` must not match it
         std::fs::create_dir_all(dir.join("s")).unwrap();
         std::fs::create_dir_all(dir.join("[slug]")).unwrap();
@@ -570,9 +652,52 @@ mod tests {
         let slug = dir.join("[slug]/page.tsx");
         std::fs::write(&plain, "plain\n".repeat(5)).unwrap();
         std::fs::write(&slug, "slug\n".repeat(5)).unwrap();
-        assert_eq!(jump(&sock, &plain, 2, None).unwrap(), format!("{}:2", plain.display()));
-        assert_eq!(jump(&sock, &slug, 3, None).unwrap(), format!("{}:3", slug.display()));
-        assert_eq!(jump(&sock, &plain, 4, None).unwrap(), format!("{}:4", plain.display()));
+        assert_eq!(jump(&sock, &plain, 2, None, None).unwrap(), format!("{}:2", plain.display()));
+        assert_eq!(jump(&sock, &slug, 3, None, None).unwrap(), format!("{}:3", slug.display()));
+        assert_eq!(jump(&sock, &plain, 4, None, None).unwrap(), format!("{}:4", plain.display()));
+
+        // --diff: a read-only base window on the left, both in diff mode, cursor in the working file
+        let eval = |code: &str| exec_lua(&sock, code, serde_json::json!([]), RPC_TIMEOUT).unwrap();
+        let base = DiffBase {
+            rev: "main".into(),
+            sha: "0".repeat(40),
+            short: "0000000".into(),
+            rel: "a.txt".into(),
+            text: Some((1..=100).map(|n| if n == 50 { "old 50\n".into() } else { format!("line {n}\n") }).collect()),
+        };
+        assert_eq!(jump(&sock, &file, 50, None, Some(&base)).unwrap(), format!("{}:50", file.display()));
+        let state = r#"
+            local wins = vim.api.nvim_tabpage_list_wins(0)
+            local out = { n = #wins, cur_diff = vim.wo.diff, base = nil }
+            for _, w in ipairs(wins) do
+              if vim.w[w].tether_diff_base then
+                local b = vim.api.nvim_win_get_buf(w)
+                out.base = { diff = vim.wo[w].diff, name = vim.api.nvim_buf_get_name(b), modifiable = vim.bo[b].modifiable,
+                             line50 = vim.api.nvim_buf_get_lines(b, 49, 50, false)[1],
+                             left = vim.fn.win_screenpos(w)[2] < vim.fn.win_screenpos(0)[2] }
+              end
+            end
+            return out"#;
+        let v = eval(state);
+        assert_eq!(v["n"], 2, "{v}");
+        assert_eq!(v["cur_diff"], true, "{v}");
+        assert_eq!(v["base"]["diff"], true, "{v}");
+        assert_eq!(v["base"]["modifiable"], false, "{v}");
+        assert_eq!(v["base"]["line50"], "old 50", "{v}");
+        assert_eq!(v["base"]["left"], true, "{v}");
+        assert_eq!(v["base"]["name"], "tether://main/a.txt", "{v}");
+        // again with another revision: still exactly one diff (the old one is replaced)
+        let other = DiffBase { rev: "v1".into(), text: None, ..base.clone() };
+        jump(&sock, &file, 10, None, Some(&other)).unwrap();
+        let v = eval(state);
+        assert_eq!(v["n"], 2, "{v}");
+        assert_eq!(v["base"]["name"], "tether://v1/a.txt", "{v}");
+        // a plain jump afterwards: the diff is gone and diff mode is off (back to the default)
+        assert_eq!(jump(&sock, &file, 5, None, None).unwrap(), format!("{}:5", file.display()));
+        let v = eval(state);
+        assert_eq!(v["n"], 1, "{v}");
+        assert_eq!(v["cur_diff"], false, "{v}");
+        assert!(v["base"].is_null(), "{v}");
         let _ = child.kill();
         let _ = child.wait();
     }

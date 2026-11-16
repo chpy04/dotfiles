@@ -1002,6 +1002,29 @@ fn search_finds_sequence_labels_including_notes_and_participants() {
 // ------------------------------------------------------------------------------------ code links
 
 #[test]
+fn enter_on_a_link_with_diff_passes_it_to_code_open() {
+    let wt = worktree();
+    let mut d = fixture("prd_flowchart");
+    let Diagram::Flowchart(f) = &mut d else { panic!() };
+    f.nodes[0].code.as_mut().unwrap().diff = Some("main".into());
+    let mut app = app_for(d, wt.path(), false, (100, 30));
+    app.pane_id = Some("w9:p3".into());
+    let fx = keys(&mut app, "<cr>");
+    let Effect::OpenCode { diff, .. } = &fx[0] else { panic!("{fx:?}") };
+    assert_eq!(diff.as_deref(), Some("main"));
+    let argv = fx[0].argv().unwrap();
+    let i = argv.iter().position(|a| a == "--diff").expect("--diff in argv");
+    assert_eq!(argv[i + 1], "main");
+    assert!(app.status.as_ref().unwrap().text.contains("(diff vs main)"));
+    // the next node has no diff: its open carries none
+    keys(&mut app, "l");
+    let fx = keys(&mut app, "<cr>");
+    if let Some(e) = fx.first() {
+        assert!(!e.argv().unwrap().contains(&"--diff".to_string()), "{e:?}");
+    }
+}
+
+#[test]
 fn enter_opens_exact_and_moved_links_and_refuses_stale_ones() {
     let wt = worktree();
     let mut app = app_for(fixture("prd_flowchart"), wt.path(), false, (100, 30));
@@ -1010,8 +1033,9 @@ fn enter_opens_exact_and_moved_links_and_refuses_stale_ones() {
     // exact
     let fx = keys(&mut app, "<cr>");
     assert_eq!(fx.len(), 1);
-    let Effect::OpenCode { abs_path, rel_path, line, from_pane, focus: focus_code } = &fx[0] else { panic!("{fx:?}") };
+    let Effect::OpenCode { abs_path, rel_path, line, from_pane, focus: focus_code, diff } = &fx[0] else { panic!("{fx:?}") };
     assert!(*focus_code, "[view] focus_code defaults to true");
+    assert_eq!(diff, &None, "a link without `diff` opens the file normally");
     assert_eq!((rel_path.as_str(), *line, from_pane.as_deref()), ("src/auth/session.ts", 142, Some("w9:p3")));
     assert_eq!(abs_path, &wt.path().join("src/auth/session.ts"));
     assert_eq!(

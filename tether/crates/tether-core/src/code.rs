@@ -19,8 +19,9 @@ use crate::workspace::{self, StateStore};
 pub trait Editor {
     /// If a tether-registered Neovim lives in `pane_id` and answers: its cursor (`path:line`).
     fn probe(&self, pane_id: &str) -> Option<String>;
-    /// Jump that Neovim; returns `path:line` as Neovim reports it.
-    fn jump(&self, pane_id: &str, file: &Path, line: u32, end_line: Option<u32>) -> Result<String>;
+    /// Jump that Neovim; returns `path:line` as Neovim reports it. `diff`: also show a diff
+    /// against that revision (and close an earlier one; `None` leaves no tether diff open).
+    fn jump(&self, pane_id: &str, file: &Path, line: u32, end_line: Option<u32>, diff: Option<&nvim::DiffBase>) -> Result<String>;
     /// Wait until the Neovim of `pane_id` answers.
     fn wait_ready(&self, pane_id: &str, timeout: Duration) -> bool;
 }
@@ -35,9 +36,9 @@ impl Editor for SocketEditor {
         nvim::probe(&nvim::socket_path_in(&self.runtime, pane_id))
     }
 
-    fn jump(&self, pane_id: &str, file: &Path, line: u32, end_line: Option<u32>) -> Result<String> {
+    fn jump(&self, pane_id: &str, file: &Path, line: u32, end_line: Option<u32>, diff: Option<&nvim::DiffBase>) -> Result<String> {
         let sock = nvim::socket_path_in(&self.runtime, pane_id);
-        nvim::jump(&sock, file, line, end_line)
+        nvim::jump(&sock, file, line, end_line, diff)
             .map_err(|e| TetherError::Other(format!("could not jump Neovim in pane {pane_id}: {e}")))
     }
 
@@ -130,6 +131,43 @@ pub fn resolve_file(path: &str, cwd: &Path) -> Result<PathBuf> {
     Err(TetherError::Input(format!("file not found: {path} (tried {})", tried.join(", "))))
 }
 
+/// Run git in `dir`; stdout on success, `None` on failure.
+fn git(dir: &Path, args: &[&str]) -> Option<Vec<u8>> {
+    let out = std::process::Command::new("git").arg("-C").arg(dir).args(args).output().ok()?;
+    out.status.success().then_some(out.stdout)
+}
+
+/// Resolve `rev` (a branch, tag, commit, `HEAD~3`, ...) in the repo of `file` and read the file as
+/// it is in that commit. Fails when `file` is not in a git repo or `rev` is not a commit; a file
+/// that does not exist in that commit gives `text: None` (the diff then shows it as all new).
+pub fn diff_base(file: &Path, rev: &str) -> Result<nvim::DiffBase> {
+    let rev = rev.trim();
+    if rev.is_empty() || rev.starts_with('-') || rev.chars().any(|c| c.is_whitespace() || c.is_control()) {
+        return Err(TetherError::Input(format!(
+            "--diff \"{rev}\" is not a git revision (give a branch, tag or commit, e.g. main or HEAD~1)"
+        )));
+    }
+    let top = send::git_toplevel(file)
+        .ok_or_else(|| TetherError::Input(format!("--diff needs a git repo, and {} is not in one", file.display())))?;
+    let top = top.canonicalize().unwrap_or(top);
+    let rel = file
+        .strip_prefix(&top)
+        .map_err(|_| TetherError::Input(format!("{} is outside its git worktree {}", file.display(), top.display())))?
+        .to_string_lossy()
+        .into_owned();
+    let sha = git(&top, &["rev-parse", "--verify", "--quiet", "--end-of-options", &format!("{rev}^{{commit}}")])
+        .map(|o| String::from_utf8_lossy(&o).trim().to_string())
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| {
+            TetherError::Input(format!("--diff {rev}: no such commit, branch or tag in {} (see `git log`, `git branch -a`)", top.display()))
+        })?;
+    let short = git(&top, &["rev-parse", "--short", &sha])
+        .map(|o| String::from_utf8_lossy(&o).trim().to_string())
+        .unwrap_or_else(|| sha.chars().take(7).collect());
+    let text = git(&top, &["show", &format!("{sha}:{rel}")]).map(|o| String::from_utf8_lossy(&o).into_owned());
+    Ok(nvim::DiffBase { rev: rev.to_string(), sha, short, rel, text })
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct CodeOpened {
     pub pane_id: String,
@@ -147,6 +185,8 @@ pub struct CodeOpened {
     pub tab_created: bool,
     /// Label of that new tab.
     pub tab_label: Option<String>,
+    /// `--diff`: the revision the file is shown against, as `<rev> (<short sha>)`.
+    pub diff: Option<String>,
     /// What was done and why, in one line (printed by the CLI).
     pub summary: String,
     pub warnings: Vec<String>,
@@ -163,6 +203,8 @@ pub struct CodeOpen<'a> {
     pub ready_timeout: Duration,
     pub wrapper: String,
     pub placement: &'a Placement,
+    /// `--diff`: show the file side by side against this git revision, for this open only.
+    pub diff: Option<&'a str>,
 }
 
 /// The tab holding the primary agent (read-only lookup; `None` when there is none or Herdr cannot say).
@@ -197,6 +239,8 @@ fn recent_tether_nvim(
 
 pub fn open(client: &Client, store: &StateStore, scope: &Scope, editor: &dyn Editor, o: &CodeOpen) -> Result<CodeOpened> {
     let implicit = o.in_tab.is_none() && o.from.is_none();
+    // 0. a bad --diff fails before any pane or tab is touched
+    let diff = o.diff.map(|rev| diff_base(&o.file, rev)).transpose()?;
     // 1. which tab
     let mut tab = match (o.in_tab, o.from) {
         (Some(spec), _) => tabs::resolve_scoped(client, scope, store, spec)?,
@@ -309,7 +353,7 @@ pub fn open(client: &Client, store: &StateStore, scope: &Scope, editor: &dyn Edi
     };
 
     // 3. jump (also after a fresh start: confirms the position and applies the range highlight)
-    let at = editor.jump(&pane_id, &o.file, r.line, r.end_line)?;
+    let at = editor.jump(&pane_id, &o.file, r.line, r.end_line, diff.as_ref())?;
     if o.focus {
         // the Neovim pane itself, reused or newly split; a pane in another tab needs that tab shown first
         if scope.tab_id.as_deref() != Some(tab.tab_id.as_str()) {
@@ -324,6 +368,13 @@ pub fn open(client: &Client, store: &StateStore, scope: &Scope, editor: &dyn Edi
             (None, false) => format!("started Neovim in pane {pane_id}"),
         };
     }
+    let diff_label = diff.as_ref().map(|d| format!("{} ({})", d.rev, d.short));
+    if let Some(d) = &diff {
+        summary.push_str(&format!("; diffing against {} ({})", d.rev, d.short));
+        if d.text.is_none() {
+            warnings.push(format!("{} does not exist in {}; the diff shows the whole file as new", d.rel, d.rev));
+        }
+    }
     Ok(CodeOpened {
         pane_id,
         reused,
@@ -335,6 +386,7 @@ pub fn open(client: &Client, store: &StateStore, scope: &Scope, editor: &dyn Edi
         split_from,
         tab_created: new_tab.is_some(),
         tab_label: new_tab.map(|(l, _)| l),
+        diff: diff_label,
         summary,
         warnings,
     })
@@ -350,6 +402,59 @@ mod tests {
 
     fn pane(id: &str, tab: &str, focused: bool) -> Pane {
         Pane { pane_id: id.into(), workspace_id: "w1".into(), tab_id: tab.into(), focused, ..Default::default() }
+    }
+
+    /// A repo with `a.txt` committed twice (tag `v1` on the first) and `new.txt` only in the worktree.
+    fn diff_repo() -> (tempfile::TempDir, PathBuf) {
+        let d = tempfile::tempdir().unwrap();
+        let root = d.path().canonicalize().unwrap();
+        let g = |args: &[&str]| {
+            let st = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&root)
+                .args(["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"])
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(st.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&st.stderr));
+        };
+        g(&["init", "-q", "-b", "main"]);
+        std::fs::write(root.join("a.txt"), "one\n").unwrap();
+        g(&["add", "a.txt"]);
+        g(&["commit", "-qm", "1"]);
+        g(&["tag", "v1"]);
+        std::fs::write(root.join("a.txt"), "two\n").unwrap();
+        g(&["commit", "-qam", "2"]);
+        std::fs::write(root.join("a.txt"), "three\n").unwrap();
+        std::fs::write(root.join("new.txt"), "fresh\n").unwrap();
+        (d, root)
+    }
+
+    #[test]
+    fn diff_base_reads_the_file_at_a_revision() {
+        let (_d, root) = diff_repo();
+        let b = diff_base(&root.join("a.txt"), "v1").unwrap();
+        assert_eq!((b.rev.as_str(), b.rel.as_str(), b.text.as_deref()), ("v1", "a.txt", Some("one\n")));
+        assert_eq!(b.sha.len(), 40);
+        assert!(b.sha.starts_with(&b.short));
+        assert_eq!(diff_base(&root.join("a.txt"), "HEAD").unwrap().text.as_deref(), Some("two\n"));
+        assert_eq!(diff_base(&root.join("a.txt"), "main~1").unwrap().sha, b.sha);
+        // a file the revision does not have: diffed against nothing
+        assert_eq!(diff_base(&root.join("new.txt"), "main").unwrap().text, None);
+    }
+
+    #[test]
+    fn diff_base_refuses_bad_revisions_and_non_repos() {
+        let (_d, root) = diff_repo();
+        let f = root.join("a.txt");
+        for bad in ["", "  ", "--output=/tmp/x", "-p", "a b", "nope-branch"] {
+            assert!(matches!(diff_base(&f, bad).unwrap_err(), TetherError::Input(_)), "{bad:?}");
+        }
+        let plain = tempfile::tempdir().unwrap();
+        let pf = plain.path().canonicalize().unwrap().join("x.txt");
+        std::fs::write(&pf, "x").unwrap();
+        let e = diff_base(&pf, "main").unwrap_err();
+        assert!(e.to_string().contains("git repo"), "{e}");
     }
 
     #[test]
@@ -384,7 +489,7 @@ mod tests {
         fn probe(&self, pane_id: &str) -> Option<String> {
             self.alive.contains(pane_id).then(|| "/x/a.ts:1".to_string())
         }
-        fn jump(&self, pane_id: &str, file: &Path, line: u32, end: Option<u32>) -> Result<String> {
+        fn jump(&self, pane_id: &str, file: &Path, line: u32, end: Option<u32>, _diff: Option<&nvim::DiffBase>) -> Result<String> {
             self.jumps.borrow_mut().push((pane_id.to_string(), line, end));
             Ok(format!("{}:{line}", file.display()))
         }
@@ -467,7 +572,7 @@ mod tests {
             &store,
             &scope(),
             ed,
-            &CodeOpen { reference: &reference, file, in_tab, from, focus, ready_timeout: Duration::from_millis(50), wrapper: "/repo/bin/tether-nvim".into(), placement: &placement },
+            &CodeOpen { reference: &reference, file, in_tab, from, focus, ready_timeout: Duration::from_millis(50), wrapper: "/repo/bin/tether-nvim".into(), placement: &placement, diff: None },
         );
         let owned = store.owned_tabs("w1").into_iter().map(|t| t.tab_id).collect();
         (res, owned)

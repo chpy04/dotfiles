@@ -390,6 +390,9 @@ pub fn prepare_diagram_comment(cfg: &CommentConfig, t: &DiagramTarget<'_>, text:
         if let Some(m) = marker {
             header.push_str(&format!("  [{m}]"));
         }
+        if let Some(d) = &c.diff {
+            header.push_str(&format!("  [diff vs {}]", one_line(d)));
+        }
         if usable {
             let (lines, hidden) = read_code_lines(&root.join(&c.path), line, end.unwrap_or(line), cfg.max_code_lines);
             code_block = format_code(&lines, hidden, cfg.max_code_line_width);
@@ -419,7 +422,7 @@ mod diagram_comment_tests {
     }
 
     fn sref(line: u32, anchor: Option<&str>) -> SpecRef {
-        SpecRef { path: "src/auth/session.ts".into(), line, end_line: None, anchor: anchor.map(Into::into) }
+        SpecRef { path: "src/auth/session.ts".into(), line, end_line: None, anchor: anchor.map(Into::into), diff: None }
     }
 
     fn target<'a>(code: Option<&'a SpecRef>) -> DiagramTarget<'a> {
@@ -440,6 +443,17 @@ mod diagram_comment_tests {
     }
 
     #[test]
+    fn a_diff_link_says_what_it_compares_against() {
+        let (_d, root) = repo();
+        let mut c = sref(142, Some("token.expiresAt <"));
+        c.diff = Some("main".into());
+        let p = prepare_diagram_comment(&CommentConfig::default(), &target(Some(&c)), "q", &root).unwrap();
+        assert!(p.payload.starts_with(
+            "[comment] diagram \"Session refresh\" › node \"Token expired?\"  src/auth/session.ts:142  [diff vs main]  (worktree: feat-login)\n  142 │"
+        ), "{}", p.payload);
+    }
+
+    #[test]
     fn moved_link_shows_the_live_line_and_stale_link_shows_no_code() {
         let (_d, root) = repo();
         let c = sref(150, Some("token.expiresAt <"));
@@ -453,7 +467,7 @@ mod diagram_comment_tests {
             p.payload,
             "[comment] diagram \"Session refresh\" › node \"Token expired?\"  src/auth/session.ts:150  [stale link]  (worktree: feat-login)\nq"
         );
-        let c = SpecRef { path: "src/gone.ts".into(), line: 3, end_line: None, anchor: None };
+        let c = SpecRef { path: "src/gone.ts".into(), line: 3, end_line: None, anchor: None, diff: None };
         let p = prepare_diagram_comment(&CommentConfig::default(), &target(Some(&c)), "q", &root).unwrap();
         assert!(p.payload.contains("[file missing]"), "{}", p.payload);
     }

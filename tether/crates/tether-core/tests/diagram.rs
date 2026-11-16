@@ -190,6 +190,23 @@ fn flowchart_semantic_errors() {
 }
 
 #[test]
+fn code_links_take_an_optional_diff_revision() {
+    let spec = |diff: &str| {
+        format!(r#"{{"type":"flowchart","title":"T","nodes":[{{"id":"a","label":"A","code":{{"path":"a.rs","line":1,"diff":{diff}}}}}]}}"#)
+    };
+    let Diagram::Flowchart(f) = validate(&spec("\"origin/main\"")).unwrap() else { panic!() };
+    assert_eq!(f.nodes[0].code.as_ref().unwrap().diff.as_deref(), Some("origin/main"));
+    let e = validate(&spec("\"--output=x\"")).unwrap_err();
+    assert!(has(&e, "/nodes/0/code/diff", "not a git revision"), "{e:?}");
+    let e = validate(&spec("\"main HEAD\"")).unwrap_err();
+    assert!(has(&e, "/nodes/0/code/diff", "not a git revision"), "{e:?}");
+    assert!(validate(&spec("\"\"")).is_err());
+    // a link without `diff` serializes without it (stored specs stay as they were)
+    let d = validate(&spec("null").replace(r#","diff":null"#, "")).unwrap();
+    assert!(!serde_json::to_string(&d).unwrap().contains("diff"));
+}
+
+#[test]
 fn sequence_semantic_errors() {
     let e = errors("invalid_sequence_unknown_participant.json");
     assert!(has(&e, "/items/1/to", "unknown participant \"ghost\""));

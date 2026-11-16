@@ -30,6 +30,10 @@ pub struct OpenArgs {
     /// Pane to split when no Neovim exists yet (default: the current pane)
     #[arg(long, value_name = "PANE")]
     pub from: Option<String>,
+    /// Also show the file side by side against this git revision (branch, tag, commit, HEAD~1, ...).
+    /// For this open only: the next open without --diff closes that diff view
+    #[arg(long, value_name = "REV")]
+    pub diff: Option<String>,
     /// Move focus to the Neovim pane (default: do not steal focus)
     #[arg(long)]
     pub focus: bool,
@@ -74,6 +78,7 @@ fn open(a: OpenArgs) -> Result<()> {
         ready_timeout: Duration::from_secs(a.timeout),
         wrapper: code::locate_wrapper(),
         placement: &cfg.placement,
+        diff: a.diff.as_deref(),
     };
     let r = code::open(&Client::from_env(), &StateStore::from_env(), &scope, &editor, &o)?;
     for w in &r.warnings {

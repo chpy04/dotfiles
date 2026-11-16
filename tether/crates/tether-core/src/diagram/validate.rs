@@ -295,6 +295,14 @@ fn check_code(errs: &mut Vec<ValidationError>, path: &str, c: &CodeRef) {
             ));
         }
     }
+    if let Some(d) = &c.diff {
+        if d.trim().is_empty() || d.starts_with('-') || d.chars().any(|ch| ch.is_whitespace() || ch.is_control()) {
+            errs.push(ValidationError::new(
+                format!("{path}/diff"),
+                format!("diff \"{d}\" is not a git revision; give a branch, tag or commit (e.g. \"main\") or omit it"),
+            ));
+        }
+    }
 }
 
 fn check_details(errs: &mut Vec<ValidationError>, path: &str, ds: &[Detail]) {

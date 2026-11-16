@@ -49,12 +49,13 @@ tether tab rename <tab> "new name"             # tether-made tabs only
 tether tab focus <tab>
 tether tab close <tab>                         # tether-made tabs only (--force overrides; don't)
 tether split right|down [--ratio 0.5] [--pane <id>] [-- cmd args...]   # prints the new pane id
-tether code open path:line[-end] [--in <tab>] [--from <pane>] [--focus]
+tether code open path:line[-end] [--in <tab>] [--from <pane>] [--focus] [--diff <rev>]
 ```
 
 - `tether tab open` prints the tab id and its first pane id. Put long-running commands after `--`.
 - `tether split` splits your own pane unless `--pane` is given. `--ratio` is the share the existing pane keeps.
 - `tether code open src/auth/session.ts:142` resolves paths against the worktree root. It jumps the Neovim already in the target tab and only splits a new one, to the right of `--from` (default your pane), when the tab has none. It never opens a second Neovim in a tab. Default target tab (no `--in`, no `--from`): your tab, unless that is the primary agent's tab; then a Neovim in the most recent tether-made tab is reused, else a new tab named after the file is opened (tether-made, no focus stolen). `--in <tab>` or `--from <pane>` picks the tab explicitly and is never redirected. The output line says which pane, whether it was reused or created, and why. A range (`:142-150`) highlights those lines for a few seconds.
+- `--diff <rev>` (optional, off by default) also shows the file side by side against a git revision: a branch (`main`, `origin/main`), tag, commit or `HEAD~1`. The left window is the file at that revision (read-only, labeled with the rev), the right one is the working copy, both in vimdiff mode, and gitsigns in that buffer compares against the rev too. It applies to that one open only: the next `code open` without `--diff` closes the diff view and puts the buffer back on its normal base, and nothing is saved. Use it only when the user asks to see a change against something ("what changed vs main", "show me this file compared to last week's commit", reviewing a branch); otherwise open code normally. To compare against where a branch forked (PR-style), pass the merge base: `--diff $(git merge-base main HEAD)`. A bad rev exits with code 2 before any pane is touched. A file that does not exist in that rev diffs as all new (with a warning).
 - Refusals exit with code 6 and say why; read the message instead of retrying with `--force`.
 
 Typical flows:
@@ -64,6 +65,9 @@ Typical flows:
 tether layout
 tether tab open "token refresh"                 # only if a visual tab is wanted
 tether code open src/auth/session.ts:142 --in "token refresh"
+
+# "show me how session.ts changed against main"
+tether code open src/auth/session.ts:142 --diff main
 
 # "open that next to the chat"
 tether layout                                    # find the agent pane in tab 1
@@ -88,6 +92,8 @@ Make a diagram when the user wants to *understand how something works* and the a
 ### Always link the code, with an anchor
 
 Every node, message or note that maps to code gets `"code": {"path", "line", "anchor"}`. `path` is relative to the worktree root, `line` is 1-based (optional `end_line` for a range). **Always add `anchor`**: a short, distinctive snippet copied from that line (`"token.expiresAt <"`, `"router.post('/login'"`). The viewer re-finds the line by its anchor when the code shifts, and marks the link *stale* (and refuses to jump to a wrong line) when the snippet is gone. Read the file first so that line numbers and anchors are real; never guess or count them by eye: run `grep -n "<anchor>" <file>` and use the line it prints, so `line` is exactly the line that contains the anchor text (for a multi-line statement, the line where the anchor text is). Only leave `code` out for elements that really have no code (an external system, "user clicks submit").
+
+Optionally a link can carry `"diff": "<rev>"` (e.g. `"code": {"path": "src/auth/session.ts", "line": 142, "anchor": "token.expiresAt <", "diff": "main"}`): pressing Enter on it then opens the file side by side against that revision, exactly like `tether code open --diff`. Add it only when the diagram is about a change (a PR walkthrough, "what this branch changed") or the user asks for it; per link, so changed files can carry it and untouched ones not. Leave it out otherwise: links open normally. Prefer a stable rev (a branch name or a commit sha from `git merge-base`) over a relative one like `HEAD~1`, since a stored diagram is reopened later. Comments from such a node carry a `[diff vs <rev>]` marker after the ref.
 
 ### Put the detail in `details`
 

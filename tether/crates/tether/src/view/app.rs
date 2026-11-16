@@ -43,8 +43,8 @@ pub const JUMP_LIMIT: usize = 100;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Effect {
     /// `tether code open <abs path>:<line> --from <pane>`.
-    /// `focus`: also pass `--focus` so the Neovim pane gets focus.
-    OpenCode { abs_path: PathBuf, rel_path: String, line: u32, from_pane: Option<String>, focus: bool },
+    /// `focus`: also pass `--focus` so the Neovim pane gets focus. `diff`: `--diff <rev>` (from the link).
+    OpenCode { abs_path: PathBuf, rel_path: String, line: u32, from_pane: Option<String>, focus: bool, diff: Option<String> },
     /// `tether send --to <to> --diagram <id> --node <node> --text-file -` with `text` on stdin.
     Send { to: String, diagram: String, node: String, text: String },
     /// `tether agents --json`.
@@ -60,8 +60,12 @@ impl Effect {
     pub fn argv(&self) -> Option<Vec<String>> {
         let s = |x: &str| x.to_string();
         match self {
-            Effect::OpenCode { abs_path, line, from_pane, focus, .. } => {
+            Effect::OpenCode { abs_path, line, from_pane, focus, diff, .. } => {
                 let mut v = vec![s("code"), s("open"), format!("{}:{}", abs_path.display(), line)];
+                if let Some(d) = diff {
+                    v.push(s("--diff"));
+                    v.push(d.clone());
+                }
                 if let Some(p) = from_pane {
                     v.push(s("--from"));
                     v.push(p.clone());
@@ -721,14 +725,16 @@ impl App {
             line,
             from_pane: app.pane_id.clone(),
             focus: app.focus_code,
+            diff: code.diff.clone(),
         };
+        let vs = code.diff.as_deref().map(|d| format!(" (diff vs {d})")).unwrap_or_default();
         match r {
             Resolved::Exact(l) => {
-                self.set_status(StatusKind::Info, format!("opening {}:{l}", code.path));
+                self.set_status(StatusKind::Info, format!("opening {}:{l}{vs}", code.path));
                 vec![open(l, self)]
             }
             Resolved::Moved(l) => {
-                self.set_status(StatusKind::Warn, format!("moved from L{} → L{l} · opening {}:{l}", code.line, code.path));
+                self.set_status(StatusKind::Warn, format!("moved from L{} → L{l} · opening {}:{l}{vs}", code.line, code.path));
                 vec![open(l, self)]
             }
             Resolved::Stale => {

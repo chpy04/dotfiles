@@ -451,7 +451,7 @@ mod runner_tests {
         let exe = script(d.path(), "sleep 1; echo ok");
         let (tx, rx) = mpsc::channel();
         let runner = Runner::new(exe, d.path().to_path_buf(), tx);
-        let eff = || Effect::OpenCode { abs_path: PathBuf::from("/x"), rel_path: "x".into(), line: 1, from_pane: None, focus: false };
+        let eff = || Effect::OpenCode { abs_path: PathBuf::from("/x"), rel_path: "x".into(), line: 1, from_pane: None, focus: false, diff: None };
         for _ in 0..(MAX_IN_FLIGHT + 2) {
             runner.perform(eff());
         }

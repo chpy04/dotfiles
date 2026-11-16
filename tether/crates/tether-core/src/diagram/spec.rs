@@ -20,6 +20,11 @@ pub struct CodeRef {
     /// Optional snippet of the source line, used to re-find the line after the code shifts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub anchor: Option<String>,
+    /// Optional git revision (branch, tag or commit, e.g. `main`) to diff the file against when the
+    /// link is opened. Omit it to open the file normally.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(length(min = 1))]
+    pub diff: Option<String>,
 }
 
 /// An expandable detail attached to a node, message or note (data model, edge case, ...).

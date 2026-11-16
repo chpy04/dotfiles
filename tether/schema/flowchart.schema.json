@@ -8,6 +8,11 @@
           "description": "Optional snippet of the source line, used to re-find the line after the code shifts.",
           "type": "string"
         },
+        "diff": {
+          "description": "Optional git revision (branch, tag or commit, e.g. `main`) to diff the file against when the\nlink is opened. Omit it to open the file normally.",
+          "minLength": 1,
+          "type": "string"
+        },
         "end_line": {
           "description": "Optional 1-based last line of a range; must be >= `line`.",
           "format": "uint32",

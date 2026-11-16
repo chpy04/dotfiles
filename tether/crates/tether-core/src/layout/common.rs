@@ -22,9 +22,13 @@ pub(crate) fn adorn_width(details: usize, has_code: bool) -> i32 {
 
 /// `path:line[-end]`.
 pub(crate) fn code_text(c: &CodeRef) -> String {
-    match c.end_line {
+    let at = match c.end_line {
         Some(e) => format!("{}:{}-{}", c.path, c.line, e),
         None => format!("{}:{}", c.path, c.line),
+    };
+    match &c.diff {
+        Some(d) => format!("{at} (diff vs {d})"),
+        None => at,
     }
 }
 
