@@ -841,11 +841,11 @@ dependencies = [
 name = "tether"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "clap",
- "serde",
  "serde_json",
+ "tempfile",
  "tether-core",
+ "toml",
 ]
 
 [[package]]
