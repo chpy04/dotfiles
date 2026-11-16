@@ -257,9 +257,9 @@ Leader: `Space` | Local leader: `\`
 
 | Key | Mode | Description |
 |-----|------|-------------|
-| `<leader>act` | n | Toggle Copilot |
-| `<leader>acd` | n | Disable Copilot |
-| `<leader>ace` | n | Enable Copilot |
+| `<leader>apt` | n | Toggle Copilot |
+| `<leader>apd` | n | Disable Copilot |
+| `<leader>ape` | n | Enable Copilot |
 | `Alt-y` | i | Accept suggestion |
 | `Alt-]` | i | Next suggestion |
 | `Alt-[` | i | Previous suggestion |

@@ -294,6 +294,7 @@ return {
 
 			wk.add({
 				{ "<leader>a", group = "ai" },
+				{ "<leader>ap", group = "copilot" },
 				{ "<leader>f", group = "find" },
 				{ "<leader>g", group = "git" },
 				{ "<leader>h", group = "harpoon" },

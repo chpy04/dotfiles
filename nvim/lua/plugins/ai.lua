@@ -7,9 +7,9 @@ return {
 		cmd = "Copilot",
 		event = "InsertEnter",
 		keys = {
-			{ "<leader>act", "<cmd>Copilot toggle<cr>", silent = true, desc = "Copilot: toggle" },
-			{ "<leader>acd", "<cmd>Copilot disable<cr>", silent = true, desc = "Copilot: disable" },
-			{ "<leader>ace", "<cmd>Copilot enable<cr>", silent = true, desc = "Copilot: enable" },
+			{ "<leader>apt", "<cmd>Copilot toggle<cr>", silent = true, desc = "Copilot: toggle" },
+			{ "<leader>apd", "<cmd>Copilot disable<cr>", silent = true, desc = "Copilot: disable" },
+			{ "<leader>ape", "<cmd>Copilot enable<cr>", silent = true, desc = "Copilot: enable" },
 		},
 		opts = {
 			suggestion = {
