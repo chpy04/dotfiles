@@ -10,6 +10,7 @@ M.defaults = {
   keys = {
     comment = "<leader>ac", -- normal + visual: comment on line / range, to the primary agent
     comment_pick = "<leader>aC", -- same, but pick the agent first
+    diagrams = "<leader>ad", -- pick a saved diagram of this repo and open it in a tab (:TetherDiagrams)
   },
   target = "primary", -- default `--to` for comment
   float = {
@@ -110,7 +111,7 @@ end
 function M.cli_keys(cli)
   local out = {}
   if type(cli) == "table" and type(cli.keys) == "table" then
-    for _, k in ipairs({ "comment", "comment_pick" }) do
+    for _, k in ipairs({ "comment", "comment_pick", "diagrams" }) do
       if type(cli.keys[k]) == "string" and cli.keys[k] ~= "" then
         out[k] = cli.keys[k]
       end

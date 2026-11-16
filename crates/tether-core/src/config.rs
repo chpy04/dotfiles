@@ -26,6 +26,22 @@ pub struct Config {
     pub view: ViewConfig,
     /// Diagram viewer colors (`[theme]`).
     pub theme: crate::theme::ThemeConfig,
+    /// Saved-diagram library (`[diagrams]`).
+    pub diagrams: DiagramsConfig,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct DiagramsConfig {
+    /// Unstarred diagrams not opened or changed for this many days are pruned automatically
+    /// (checked at most once a day, on `create` and `list`). 0 keeps everything.
+    pub keep_days: u32,
+}
+
+impl Default for DiagramsConfig {
+    fn default() -> Self {
+        DiagramsConfig { keep_days: 30 }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -35,16 +51,36 @@ pub struct Keys {
     pub comment: String,
     /// Neovim: pick the target agent first.
     pub comment_pick: String,
+    /// Neovim: browse and open the repo's saved diagrams.
+    pub diagrams: String,
     // Viewer keys (Phase 3+).
+    /// Sequence diagrams: next / previous message (`down`/`up`), previous / next participant
+    /// (`left`/`right`). The arrow keys do the same in sequence diagrams.
     pub view_down: String,
     pub view_up: String,
     pub view_left: String,
     pub view_right: String,
+    /// Flowcharts: step forward along the highlighted outgoing edge / back along the edge you came by.
+    pub view_flow_forward: String,
+    pub view_flow_back: String,
+    /// Flowcharts: switch to the next / previous sibling branch (the other children of the parent).
+    pub view_flow_branch_next: String,
+    pub view_flow_branch_prev: String,
+    /// Flowcharts: move on screen to the nearest node left / down / up / right (the arrow keys do too).
+    pub view_flow_left: String,
+    pub view_flow_down: String,
+    pub view_flow_up: String,
+    pub view_flow_right: String,
     pub view_open: String,
     pub view_details: String,
     pub view_search: String,
     pub view_search_next: String,
     pub view_quit: String,
+    /// Viewer: star / unstar the diagram (starred diagrams are never pruned).
+    pub view_star: String,
+    /// Jump list: back / forward over the focus history.
+    pub view_jump_back: String,
+    pub view_jump_forward: String,
     /// What `<leader>` stands for in key sequences (viewer and Neovim). Default: space.
     pub leader: String,
 }
@@ -54,15 +90,27 @@ impl Default for Keys {
         Keys {
             comment: "<leader>ac".into(),
             comment_pick: "<leader>aC".into(),
+            diagrams: "<leader>ad".into(),
             view_down: "j".into(),
             view_up: "k".into(),
             view_left: "h".into(),
             view_right: "l".into(),
+            view_flow_forward: "l".into(),
+            view_flow_back: "h".into(),
+            view_flow_branch_next: "j".into(),
+            view_flow_branch_prev: "k".into(),
+            view_flow_left: "H".into(),
+            view_flow_down: "J".into(),
+            view_flow_up: "K".into(),
+            view_flow_right: "L".into(),
             view_open: "<CR>".into(),
             view_details: "<Tab>".into(),
             view_search: "/".into(),
             view_search_next: "n".into(),
             view_quit: "q".into(),
+            view_star: "s".into(),
+            view_jump_back: "<C-o>".into(),
+            view_jump_forward: "<C-i>".into(),
             leader: " ".into(),
         }
     }
@@ -108,11 +156,13 @@ pub struct ViewConfig {
     pub icons: bool,
     /// Capture the mouse in the viewer (click to focus, wheel to scroll).
     pub mouse: bool,
+    /// Enter (open code) also moves focus to the Neovim pane, whether it was reused or just split.
+    pub focus_code: bool,
 }
 
 impl Default for ViewConfig {
     fn default() -> Self {
-        ViewConfig { icons: true, mouse: true }
+        ViewConfig { icons: true, mouse: true, focus_code: true }
     }
 }
 
@@ -137,16 +187,34 @@ pub const DEFAULT_FILE: &str = r##"# tether configuration. Every key is optional
 comment = "<leader>ac"
 # Neovim: pick which agent receives the comment first.
 comment_pick = "<leader>aC"
-# Diagram viewer keys (used from Phase 3 on).
+# Neovim: pick one of this repo's saved diagrams to open in a tab (:TetherDiagrams).
+diagrams = "<leader>ad"
+# Diagram viewer keys.
+# Sequence diagrams: j/k next/previous message, h/l previous/next participant (the arrow keys too).
 view_down = "j"
 view_up = "k"
 view_left = "h"
 view_right = "l"
+# Flowcharts: h/l step back/forward along the arrows, j/k switch to the next/previous sibling branch,
+# H/J/K/L move on screen to the nearest node left/down/up/right (the arrow keys do too).
+view_flow_back = "h"
+view_flow_forward = "l"
+view_flow_branch_next = "j"
+view_flow_branch_prev = "k"
+view_flow_left = "H"
+view_flow_down = "J"
+view_flow_up = "K"
+view_flow_right = "L"
 view_open = "<CR>"
 view_details = "<Tab>"
 view_search = "/"
 view_search_next = "n"
 view_quit = "q"
+# Viewer: star / unstar the diagram (starred diagrams are never pruned).
+view_star = "s"
+# Jump list over the focus history. Terminals without the kitty keyboard protocol send <C-i> as <Tab>.
+view_jump_back = "<C-o>"
+view_jump_forward = "<C-i>"
 # What <leader> means in key sequences such as "<leader>ac".
 leader = " "
 
@@ -181,6 +249,8 @@ code_ratio = 0.5
 icons = true
 # Mouse support in the viewer (click to focus, wheel to scroll).
 mouse = true
+# Enter in the viewer also focuses the Neovim pane it opened or reused (false: leave focus on the viewer).
+focus_code = true
 
 # Viewer colors default to Catppuccin Mocha. Every key is optional ("#rrggbb"); uncomment to override.
 [theme]
@@ -203,6 +273,12 @@ name = "catppuccin-mocha"
 # decision = "#2b2840"    #   actor service queue external note alt opt loop par
 # [theme.borders]         # box borders and icons, same keys
 # decision = "#cba6f7"
+
+[diagrams]
+# Diagrams live in ~/.local/share/tether/repos/<repo>/ (override the root with $TETHER_DATA), shared
+# by all worktrees of a clone. Unstarred diagrams neither opened nor changed for this many days are
+# pruned automatically, at most once a day. 0 = never prune. Starred diagrams are never pruned.
+keep_days = 30
 
 [nvim]
 # Command used to launch Neovim from `tether-nvim` and `tether code open`.
@@ -296,6 +372,19 @@ mod tests {
         assert_eq!(c.comment.template, DEFAULT_TEMPLATE);
         assert_eq!(c.nvim.command, "nvim");
         assert_eq!(c.placement.diagram, "tab");
+        assert_eq!(c.keys.diagrams, "<leader>ad");
+        assert_eq!(c.keys.view_star, "s");
+        assert_eq!(c.diagrams.keep_days, 30);
+    }
+
+    #[test]
+    fn diagrams_section() {
+        let c = Config::parse("[diagrams]\nkeep_days = 0\n[keys]\ndiagrams = \"<leader>zz\"\n").unwrap();
+        assert_eq!(c.diagrams.keep_days, 0);
+        assert_eq!(c.keys.diagrams, "<leader>zz");
+        assert_eq!(c.get("diagrams.keep_days").unwrap(), serde_json::json!(0));
+        assert!(Config::parse("[diagrams]\nkeep = 3\n").is_err());
+        assert!(Config::parse("[diagrams]\nkeep_days = -1\n").is_err());
     }
 
     #[test]

@@ -259,7 +259,7 @@ fn edge_tier(app: &App, e: &EdgeGeom) -> u8 {
     if e.from != app.focus && e.to != app.focus {
         return 0;
     }
-    if e.from == app.focus && app.branch.get(&app.focus).is_some_and(|b| *b == e.to) {
+    if e.from == app.focus && app.highlighted_branch(&app.focus).is_some_and(|b| b.as_str() == e.to.as_str()) {
         2
     } else {
         1
@@ -714,6 +714,9 @@ fn draw_header(app: &App, buf: &mut Buffer, area: RRect) {
     let right_edge = area.x + area.width;
     let mut x = put_str(buf, area.x + 1, area.y, app.icons.diagram(flow), st(th.accent, th.bar).add_modifier(Modifier::BOLD), right_edge);
     x = put_str(buf, x + 1, area.y, &truncate(&title, (area.width as usize).saturating_sub(8)), bar.add_modifier(Modifier::BOLD), right_edge);
+    if app.starred {
+        x = put_str(buf, x + 1, area.y, "★", st(th.warn, th.bar).add_modifier(Modifier::BOLD), right_edge);
+    }
     x = put_str(buf, x + 2, area.y, &counts, st(th.dim.mix(th.bar, 0.3), th.bar), right_edge);
     // focused element, right aligned
     if let Some(el) = app.focused_element() {
@@ -730,7 +733,10 @@ fn draw_header(app: &App, buf: &mut Buffer, area: RRect) {
 fn hint_segments(app: &App) -> Vec<(String, &'static str)> {
     let km = &app.keymap;
     let mut v: Vec<(String, &'static str)> = if app.is_flowchart() {
-        vec![("hjkl".into(), "move")]
+        vec![
+            (format!("{}/{}", km.hint(Action::StepBack), km.hint(Action::StepForward)), "step"),
+            (format!("{}/{}", km.hint(Action::BranchNext), km.hint(Action::BranchPrev)), "branch"),
+        ]
     } else {
         vec![("j/k".into(), "message"), ("h/l".into(), "participant")]
     };
@@ -1021,17 +1027,38 @@ fn draw_help(app: &App, buf: &mut Buffer, body: RRect) {
     let flow = app.is_flowchart();
     let mut rows: Vec<(String, String)> = Vec::new();
     if flow {
-        rows.push(("j / k".into(), "follow an edge / go back to the parent".into()));
-        rows.push(("h / l".into(), "siblings; at a decision pick a branch".into()));
+        rows.push((
+            format!("{} / {}", km.hint(Action::StepBack), km.hint(Action::StepForward)),
+            "step back / forward along the arrows".into(),
+        ));
+        rows.push((
+            format!("{} / {}", km.hint(Action::BranchNext), km.hint(Action::BranchPrev)),
+            "switch branch (the parent's other children)".into(),
+        ));
+        rows.push((
+            format!(
+                "{} {} {} {}",
+                km.hint(Action::Left),
+                km.hint(Action::Down),
+                km.hint(Action::Up),
+                km.hint(Action::Right)
+            ),
+            "move on screen to the nearest node (arrows too)".into(),
+        ));
     } else {
         rows.push(("j / k".into(), "next / previous message".into()));
         rows.push(("h / l".into(), "previous / next participant".into()));
     }
     rows.push(("g / G".into(), "first / last".into()));
+    rows.push((
+        format!("{} / {}", km.hint(Action::JumpBack), km.hint(Action::JumpForward)),
+        "back / forward through where you have been".into(),
+    ));
     rows.push((km.hint(Action::Open), "open the linked code in Neovim".into()));
     rows.push((km.hint(Action::Details), "expand / collapse details".into()));
     rows.push((km.hint(Action::Comment), "comment to the primary agent".into()));
     rows.push((km.hint(Action::CommentPick), "comment to a picked agent".into()));
+    rows.push((km.hint(Action::Star), "star / unstar this diagram (starred ones are never pruned)".into()));
     rows.push((format!("{} / n / N", km.hint(Action::Search)), "search labels / next / previous".into()));
     rows.push(("^d / ^u".into(), "scroll half a page (also the mouse wheel)".into()));
     rows.push((km.hint(Action::Help), "this help".into()));

@@ -22,6 +22,8 @@ impl Env {
             .env_remove("HERDR_TAB_ID")
             .env_remove("HERDR_PANE_ID")
             .env("TETHER_STATE", self.dir.path().join("state.json"))
+            // never touch the real diagram library
+            .env("TETHER_DATA", self.dir.path().join("tether-data"))
             .env("TETHER_CONFIG", self.dir.path().join("config.toml"))
             .current_dir(self.dir.path());
         if let Some(h) = herdr {

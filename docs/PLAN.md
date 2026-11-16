@@ -20,6 +20,9 @@ Reference them in commit messages and test names.
 
 ## Environment facts
 
+- Tests must never touch the real diagram library: every test that can reach `DiagramStore` sets `TETHER_DATA` to a temp dir
+  (core tests use `DiagramStore::open_at`). The data dir is `$TETHER_DATA`, else `$XDG_DATA_HOME/tether`, else `~/.local/share/tether`.
+
 - Herdr 0.9.5, protocol 22. Full socket API schema: `docs/herdr/api-schema.json`
   (generated with `herdr api schema --json`). Herdr's own agent guide: `docs/herdr/herdr-skill.md`.
   The CLI (`herdr pane --help`, `herdr agent --help`, …) wraps the same API and returns JSON. It's a
@@ -37,11 +40,12 @@ crates/tether-core/src/
   config.rs                   ~/.config/tether/config.toml (TETHER_CONFIG env overrides path)
   workspace.rs                resolve current workspace/tab/pane, agents, primary-agent tagging
   send.rs                     comment payload formatting + delivery
-  diagram/                    spec types, JSON Schema, validation, store, mermaid export, anchors
+  diagram/                    spec types, JSON Schema, validation, store (per-repo library under $TETHER_DATA, index.json), mermaid export, anchors
   layout/                     flowchart (dot -Tplain) + sequence layout -> cell grid geometry (pure)
 crates/tether/src/
   main.rs, cli/…              clap CLI
   view/…                      ratatui viewer (`tether view <id>`)
+  browse/…                    ratatui diagram browser (`tether diagrams`): list + live preview via view's drawing
 schema/                       published JSON Schemas (flowchart, sequence)
 nvim/                         Lua plugin (plugin/tether.lua, lua/tether/*.lua)
 bin/tether-nvim               Neovim wrapper adding --listen <runtime>/tether/<pane>.sock

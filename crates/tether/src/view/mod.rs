@@ -22,6 +22,8 @@ pub mod nav;
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod star_tests;
 
 use std::io::{Read, Write};
 use std::path::PathBuf;
@@ -33,10 +35,13 @@ use std::time::{Duration, Instant};
 
 use ratatui::backend::CrosstermBackend;
 use ratatui::crossterm::event::{
-    self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture, Event, KeyEventKind, MouseEventKind,
+    self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture, Event, KeyEventKind,
+    KeyboardEnhancementFlags, MouseEventKind, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use ratatui::crossterm::execute;
-use ratatui::crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
+use ratatui::crossterm::terminal::{
+    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
+};
 use ratatui::Terminal;
 use tether_core::config::Config;
 use tether_core::diagram::{Diagram, DiagramStore};
@@ -71,6 +76,7 @@ pub fn build_app(
         theme,
         icons,
         pane_id,
+        focus_code: cfg.view.focus_code,
         term,
         engine: Engine::Auto,
     })
@@ -182,6 +188,7 @@ fn finish(effect: Effect, out: std::result::Result<String, String>) -> Msg {
         Effect::FetchAgents => Msg::Agents(out.and_then(|s| {
             serde_json::from_str::<Vec<AgentRow>>(&s).map_err(|e| format!("unexpected `tether agents` output: {e}"))
         })),
+        Effect::Star { on, .. } => Msg::StarDone { result: out, on },
         Effect::Quit => Msg::OpenDone(out),
     }
 }
@@ -258,9 +265,13 @@ fn run_tether(
 
 /// Run the interactive viewer for a stored diagram in the current pane.
 pub fn run(diagram_id: &str) -> Result<()> {
-    use std::io::IsTerminal;
     let cwd = std::env::current_dir().map_err(|e| TetherError::Other(format!("cannot determine cwd: {e}")))?;
-    let store = DiagramStore::open(&cwd);
+    run_in(&DiagramStore::open(&cwd), diagram_id)
+}
+
+/// [`run`] for a diagram of an explicit store (the diagram browser opens other repos' diagrams too).
+pub fn run_in(store: &DiagramStore, diagram_id: &str) -> Result<()> {
+    use std::io::IsTerminal;
     let diagram = store.get(diagram_id).map_err(|e| TetherError::Input(e.to_string()))?;
     if !std::io::stdout().is_terminal() || !std::io::stdin().is_terminal() {
         return Err(TetherError::Input(
@@ -269,7 +280,8 @@ pub fn run(diagram_id: &str) -> Result<()> {
     }
     let cfg = Config::load()?;
     let term = ratatui::crossterm::terminal::size().unwrap_or((100, 30));
-    let app = build_app(diagram, diagram_id, store.worktree_root().to_path_buf(), &cfg, None, term)?;
+    let mut app = build_app(diagram, diagram_id, store.worktree_root().to_path_buf(), &cfg, None, term)?;
+    app.starred = store.info(diagram_id).map(|i| i.starred).unwrap_or(false);
     let exe = std::env::current_exe().map_err(|e| TetherError::Other(format!("cannot locate the tether binary: {e}")))?;
     let (tx, rx) = mpsc::channel();
     let runner = Runner::new(exe, store.worktree_root().to_path_buf(), tx);
@@ -280,6 +292,8 @@ pub fn run(diagram_id: &str) -> Result<()> {
 
 /// True while the terminal is in the viewer's raw/alternate-screen state.
 static TERMINAL_ACTIVE: AtomicBool = AtomicBool::new(false);
+/// True once the kitty keyboard protocol flags were pushed (so `Ctrl-i` is told apart from `Tab`).
+static KEYBOARD_ENHANCED: AtomicBool = AtomicBool::new(false);
 
 /// Restores the terminal when dropped: on normal return, on `?` errors after raw mode was
 /// enabled, and during a panic unwind. A panic hook (see [`event_loop`]) restores first so the
@@ -296,6 +310,14 @@ impl TerminalGuard {
         execute!(stdout, EnterAlternateScreen, EnableBracketedPaste)?;
         if mouse {
             execute!(stdout, EnableMouseCapture)?;
+        }
+        // Without this a terminal sends Ctrl-i as Tab; the jump list's Ctrl-i needs the difference.
+        // Only plain key disambiguation is asked for: text keys, Tab, Enter and Esc stay as they were.
+        // Pushed without asking first: crossterm's support query waits up to 2 s when a terminal
+        // answers neither it nor the device-attributes request, and a terminal that does not know
+        // the protocol ignores the sequence.
+        if execute!(stdout, PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)).is_ok() {
+            KEYBOARD_ENHANCED.store(true, Ordering::SeqCst);
         }
         Ok(guard)
     }
@@ -383,6 +405,9 @@ fn restore_terminal() {
         return;
     }
     let mut out = std::io::stdout();
+    if KEYBOARD_ENHANCED.swap(false, Ordering::SeqCst) {
+        let _ = execute!(out, PopKeyboardEnhancementFlags);
+    }
     let _ = execute!(out, DisableMouseCapture, DisableBracketedPaste, LeaveAlternateScreen);
     let _ = disable_raw_mode();
 }
@@ -426,7 +451,7 @@ mod runner_tests {
         let exe = script(d.path(), "sleep 1; echo ok");
         let (tx, rx) = mpsc::channel();
         let runner = Runner::new(exe, d.path().to_path_buf(), tx);
-        let eff = || Effect::OpenCode { abs_path: PathBuf::from("/x"), rel_path: "x".into(), line: 1, from_pane: None };
+        let eff = || Effect::OpenCode { abs_path: PathBuf::from("/x"), rel_path: "x".into(), line: 1, from_pane: None, focus: false };
         for _ in 0..(MAX_IN_FLIGHT + 2) {
             runner.perform(eff());
         }

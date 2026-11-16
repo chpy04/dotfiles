@@ -2,7 +2,7 @@ use clap::Args;
 use tether_core::diagram::DiagramStore;
 use tether_core::error::{Result, TetherError};
 
-use super::diagram::{open_diagram, parse_placement, Placement};
+use super::diagram::{open_diagram, open_store, parse_placement, Placement};
 use crate::view;
 
 #[derive(Args)]
@@ -21,7 +21,13 @@ pub struct ViewArgs {
 }
 
 pub fn run(a: ViewArgs) -> Result<()> {
-    let placement = match a.placement.as_deref() {
+    open_stored(&open_store()?, &a.id, a.placement.as_deref(), a.pane.as_deref(), a.focus)
+}
+
+/// Show the stored diagram `id` of `store` per `placement` (default: the viewer runs in this pane).
+/// Running the viewer (here, or in the tab/pane it opens) records `last_opened`.
+pub fn open_stored(store: &DiagramStore, id: &str, placement: Option<&str>, pane: Option<&str>, focus: bool) -> Result<()> {
+    let placement = match placement {
         None => Placement::Here,
         Some(p) => match parse_placement(p)? {
             Placement::None => return Err(TetherError::Input("--placement none makes no sense for `tether view`".into())),
@@ -29,12 +35,12 @@ pub fn run(a: ViewArgs) -> Result<()> {
         },
     };
     if placement == Placement::Here {
-        return view::run(&a.id);
+        // a missing id is reported by the viewer; the touch just records that it was opened
+        let _ = store.touch_opened(id);
+        return view::run_in(store, id);
     }
-    let cwd = std::env::current_dir().map_err(|e| TetherError::Other(format!("cannot determine cwd: {e}")))?;
-    let store = DiagramStore::open(&cwd);
-    let d = store.get(&a.id).map_err(|e| TetherError::Input(e.to_string()))?;
-    let o = open_diagram(&a.id, d.title(), placement, a.pane.as_deref(), a.focus, store.worktree_root())?;
+    let d = store.get(id).map_err(|e| TetherError::Input(e.to_string()))?;
+    let o = open_diagram(id, d.title(), placement, pane, focus, store.worktree_root())?;
     match o.mode {
         "tab" => println!("opened tab \"{}\" ({})", o.label.unwrap_or_default(), o.tab_id.unwrap_or_default()),
         _ => println!("opened pane {}", o.pane_id.unwrap_or_default()),

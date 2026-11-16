@@ -26,12 +26,20 @@ All of them work inside a Herdr pane (they read `HERDR_WORKSPACE_ID`) and add `-
 | `tether code open path:line[-end] [--in tab] [--from pane]` | Open or reuse Neovim at a line (never a second Neovim in a tab). |
 | `tether send [--to primary\|pane\|agent] --ref path:line --text ...` | Send a comment with the line's code to an agent. `--diagram <id> --node <id>` comments on a diagram element. |
 | `tether agents` | Agents in this workspace with their states. |
-| `tether diagram create spec.json \| -` | Validate and store a diagram, open it in a new tab. Also `list`, `show`, `update`, `export --mermaid`, `render`, `delete`. |
+| `tether diagram create spec.json \| - [--star]` | Validate and save a diagram, open it in a new tab. Also `show`, `update`, `export --mermaid`, `render`. |
+| `tether diagram list [--all-repos] [--starred] [--json]` | This repo's saved diagrams, newest first: ★, id, type, branch, age, title. |
+| `tether diagram open <id\|title words> [--placement tab\|split\|here]` | Reopen a saved diagram; a partial, case-insensitive title is enough (several matches: they are listed, exit 2). |
+| `tether diagram star\|unstar <id>`, `rename <id> <title>`, `rm <id>...` (alias `delete`), `path` | Manage saved diagrams. Starred ones are never pruned. |
+| `tether diagram prune [--dry-run]` | Remove unstarred diagrams not opened or changed for `[diagrams] keep_days` (30) days. Also runs by itself at most once a day, on `create` and `list`. |
+| `tether diagrams` (alias `tether diagram browse`) | Full-screen browser: list on the left, live preview on the right; open, star, rename, delete, filter, copy Mermaid. |
 | `tether view <id> [--placement tab\|split\|here]` | Open the interactive viewer for a stored diagram. |
 | `tether config show\|path\|init\|get` | Inspect or create the config file. |
 
 Diagram specs are JSON, validated against `schema/flowchart.schema.json` and `schema/sequence.schema.json`,
-stored under `.tether/diagrams/` in the worktree. The agent-facing documentation is `skill/SKILL.md`.
+saved per repo under `~/.local/share/tether/repos/<repo>-<hash>/diagrams/` (`TETHER_DATA` moves the root), shared by
+every worktree of a clone, with an `index.json` holding titles, stars, branch and timestamps. Nothing is written
+into the repo any more. Diagrams saved by older versions in `<worktree>/.tether/diagrams/` are imported once, on
+first use (the old files stay; delete the folder when you like). The agent-facing documentation is `skill/SKILL.md`.
 
 ## Keymaps
 
@@ -41,27 +49,49 @@ Neovim (set by the plugin, remappable under `[keys]`):
 | --- | --- |
 | `<leader>ac` | Comment on the current line (or visual range) to the primary agent. Enter sends, Esc cancels, Shift-Enter adds a line. |
 | `<leader>aC` | Same, after picking the target agent (`vim.ui.select`). |
+| `<leader>ad` (`:TetherDiagrams`) | Pick one of this repo's saved diagrams (`★ Session refresh · flowchart · feat-login · 2d`) and open it in a new tether tab. `keys.diagrams` remaps it. |
 
 Diagram viewer (`tether view`):
 
 | Key | Flowchart | Sequence diagram |
 | --- | --- | --- |
-| `j` / `k` | follow an edge / back to the parent | next / previous message |
-| `h` / `l` | previous / next sibling or branch | previous / next participant |
-| `Enter` | open the linked code in Neovim (reuses the same one; stale links refuse to jump) | same |
+| `l` / `h` | step forward along the highlighted outgoing edge (the first branch by position, or the last one you chose at that node) / step back along the edge you arrived by (else the first parent) | `j`/`k` next / previous message, `h`/`l` previous / next participant |
+| `j` / `k` | switch to the next / previous sibling branch (the other children of the node `h` returns to, by position, wrapping; roots switch between roots). The parent remembers the choice, so `h` then `l` comes back to it | see the `l` / `h` row |
+| `H` `J` `K` `L` (and the arrow keys) | move on screen to the nearest node left / down / up / right (`J`/`K` keep their column), so every node is reachable by position | arrow keys, as `h` `j` `k` `l` above |
+| `Ctrl-o` / `Ctrl-i` | jump list: back / forward over where the focus has been (up to 100 positions; `Ctrl-i` needs a terminal with the kitty keyboard protocol, others send it as `Tab`) | same |
+| `Enter` | open the linked code in Neovim (reuses the same one; stale links refuse to jump) and focus that pane (`[view] focus_code = false` keeps focus on the viewer) | same |
 | `Tab` | expand / collapse details | same, for a message or note |
 | `<leader>ac` / `<leader>aC` | comment on the node to the primary / a picked agent | same |
 | `/`, `n`, `N` | search labels, next, previous | same |
-| `g` / `G`, `Ctrl-d` / `Ctrl-u`, `?`, `q` | first / last, half page, help, quit | same |
+| `g` / `gg` / `G`, `Ctrl-d` / `Ctrl-u`, `?`, `q` | first / last, half page, help, quit | same |
+| `s` | star / unstar this diagram (shown as ★ in the header; `view_star` remaps it) | same |
 
-Moving the focus never retargets Neovim; only `Enter` does.
+In a flowchart `h`/`l` walk the arrows and `j`/`k` switch branch; the highlighted outgoing edge of the focused node (where `l` goes) is drawn bold in the accent color. Moving the focus never retargets Neovim; only `Enter` does.
+The viewer keys are remappable under `[keys]`: `view_down`/`view_up`/`view_left`/`view_right` (sequence diagrams),
+`view_flow_back`/`view_flow_forward`/`view_flow_branch_next`/`view_flow_branch_prev` and `view_flow_left`/`view_flow_down`/`view_flow_up`/`view_flow_right` (flowcharts), `view_jump_back`, `view_jump_forward`.
+
+Diagram browser (`tether diagrams`):
+
+| Key | Action |
+| --- | --- |
+| `j` / `k` (or arrows), `g` / `G` | move through the list |
+| `Enter` | open in the full viewer here; `q` there returns to the browser |
+| `t` | open in a new tether tab (`tether view <id> --placement tab`) and stay |
+| `s` | star / unstar |
+| `r` | rename (inline; the id stays) |
+| `d` | delete, after `y/n` |
+| `/` | filter by title or branch as you type (`Enter` keeps it, `Esc` clears it) |
+| `a` | toggle all repos; `S` toggle starred only |
+| `Ctrl-d` / `Ctrl-u` (`<` / `>`) | scroll (pan) the preview |
+| `e` | copy the Mermaid source to the clipboard (`pbcopy`) |
+| `?`, `q` | help, quit |
 
 ## Config
 
 `~/.config/tether/config.toml` (`TETHER_CONFIG` overrides the path). A missing file means defaults;
 `tether config init` writes a commented one, `tether config show` prints the effective values. Sections:
-`[keys]`, `[comment]` (payload template, `max_code_lines`, `max_code_line_width`), `[placement]`, `[view]`
-(icons, mouse), `[theme]` (colors, Catppuccin Mocha by default), `[nvim]`. State (primary agent, tabs tether
+`[keys]`, `[comment]` (payload template, `max_code_lines`, `max_code_line_width`), `[placement]`, `[diagrams]` (`keep_days`), `[view]`
+(icons, mouse, focus_code), `[theme]` (colors, Catppuccin Mocha by default), `[nvim]`. State (primary agent, tabs tether
 made) lives in `~/.local/state/tether/state.json` (`TETHER_STATE`).
 
 ## Tests

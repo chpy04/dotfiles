@@ -159,19 +159,26 @@ JSON Schemas are published in the repo: `schema/flowchart.schema.json` and `sche
 ### Commands
 
 ```
-tether diagram create spec.json [--open tab|split|here|none] [--pane <id>] [--focus] [--json]
+tether diagram list [--json] [--starred] [--all-repos]   # this repo's saved diagrams, newest first
+tether diagram create spec.json [--open tab|split|here|none] [--pane <id>] [--focus] [--star] [--json]
 tether diagram create - < spec.json            # spec on stdin
-tether diagram list [--json]                   # diagrams stored in this worktree
+tether diagram open <id|title words> [--placement tab|split|here]   # reopen a saved diagram
+tether diagram star <id> | unstar <id>         # starred diagrams are never pruned
+tether diagram rename <id> <new title>         # the id stays
 tether diagram show <id>                       # the stored spec as JSON
 tether diagram update <id> spec.json           # replace the spec (validated), same id
 tether diagram export <id> --mermaid           # Mermaid source on stdout
 tether diagram export <id> --mermaid --compat  # plain `participant` lines for Mermaid before v11
-tether diagram delete <id>
+tether diagram rm <id>...                      # (`delete` is an alias)
+tether diagram path | prune [--dry-run]        # the repo's diagram folder | remove stale unstarred ones
 tether view <id> [--placement tab|split|here]  # (re)open the viewer
 ```
 
+- **Diagrams persist per repo**, not per worktree: they live outside the repo (`~/.local/share/tether/repos/<repo>-<hash>/`), shared by every worktree of the clone, and nothing is written into the repo or its `.gitignore`. Unstarred diagrams not opened or changed for 30 days (`[diagrams] keep_days`) are pruned automatically; starred ones never are. The user can browse them all with `tether diagrams` (a list with a live preview) or Space-a-d in Neovim.
+- **Before creating a diagram, run `tether diagram list`.** If one on the same subject already exists, do not make a duplicate: revise it with `tether diagram update <id> spec.json` (then tell the user to reopen it), or, if the user just wants to see it, open it with `tether diagram open "<title words>" --placement tab` (an ambiguous title exits 2 and lists the candidates; use the id then).
+- When the user asks to keep, save or pin a diagram ("keep this one", "save that for later"), `tether diagram star <id>` it, or pass `--star` to `create`.
 - Simplest and most reliable: one command with the spec inline, no temp file: `tether diagram create - <<'EOF'` then the JSON, then `EOF` (quote the `'EOF'`). Never run a bare `cat` or any other command that waits on stdin before it: the Bash tool would hang.
-- `create` validates, stores the spec in `.tether/diagrams/<id>.json` in the worktree (gitignored) and prints the id. By default (`--open tab`, or the user's `[placement] diagram` config) it opens a **new tab named after the title** running the viewer, in the background; the tab is tether-made, so you may close or rename it later. The viewer pane closes when the user presses `q`.
+- `create` validates, stores the spec in the repo's diagram library (see above) and prints the id. By default (`--open tab`, or the user's `[placement] diagram` config) it opens a **new tab named after the title** running the viewer, in the background; the tab is tether-made, so you may close or rename it later. The viewer pane closes when the user presses `q`.
 - `--open split` puts the viewer in a split to the right of your pane (or `--pane <id>`): use it when the user says "next to the chat". `--open none` only stores it. `--open here` runs the viewer in your own pane: never do this from the primary agent's pane.
 - Run `tether layout` first, like for any tab. Do not pass `--focus` unless the user should look right now.
 - To revise a diagram the user is looking at, `tether diagram update <id> spec.json`, then tell them to reopen it (`tether view <id> --placement tab`); the open viewer shows the version it started with.
@@ -179,7 +186,7 @@ tether view <id> [--placement tab|split|here]  # (re)open the viewer
 
 ### What the user does in the viewer (so you can answer their comments)
 
-`j`/`k` follow edges or move between messages, `h`/`l` switch branch or participant, Enter opens the linked code in the Neovim split to the right of the viewer (the same Neovim every time), Tab expands `details`, `/` searches, Space-a-c comments on the focused node to you. A comment from a node arrives as:
+In a flowchart `h`/`l` step back/forward along the arrows, `j`/`k` switch branch and `HJKL` move on screen; in a sequence diagram `j`/`k` move between messages and `h`/`l` between participants. Enter opens the linked code in the Neovim split to the right of the viewer (the same Neovim every time) and focuses it, Tab expands `details`, `/` searches, Space-a-c comments on the focused node to you. A comment from a node arrives as:
 
 ```
 [comment] diagram "Session refresh" › node "Token expired?"  src/auth/session.ts:142  (worktree: feat-login)

@@ -30,6 +30,8 @@ impl Env {
             .env_remove("HERDR_TAB_ID")
             .env_remove("HERDR_PANE_ID")
             .env("TETHER_STATE", self.dir.path().join("state.json"))
+            // never touch the real diagram library
+            .env("TETHER_DATA", self.dir.path().join("tether-data"))
             .env("TETHER_CONFIG", self.dir.path().join("config.toml"))
             .current_dir(self.dir.path());
         if let Some(h) = herdr {
@@ -147,8 +149,9 @@ fn create_list_show_export_update_delete_round_trip() {
     let o = env.cmd(None).args(["diagram", "show", &id]).output().unwrap();
     assert_eq!(o.status.code(), Some(2));
     assert!(err(&o).contains("diagram not found"), "{}", err(&o));
-    // stored under .tether/diagrams
-    assert!(env.dir.path().join(".tether/diagrams").is_dir());
+    // stored in the data dir (TETHER_DATA), not in the worktree
+    assert!(env.dir.path().join("tether-data/repos").is_dir());
+    assert!(!env.dir.path().join(".tether").exists());
 }
 
 #[test]

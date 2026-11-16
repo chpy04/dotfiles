@@ -1,14 +1,18 @@
-//! `tether diagram create|list|show|export|update|delete|render` and the placement logic shared
-//! with `tether view` (F3.1, F3.6).
+//! `tether diagram create|list|open|star|unstar|rename|rm|prune|path|browse|show|export|update|render`
+//! and the placement logic shared with `tether view` (F3.1, F3.6).
+//!
+//! Diagrams are stored per repo under the data dir (see `tether_core::diagram::store`).
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::time::UNIX_EPOCH;
 
 use clap::{Args, Subcommand};
 use serde_json::json;
 use tether_core::config::Config;
-use tether_core::diagram::{self, format_errors, to_mermaid_opts, Diagram, DiagramStore, StoreError};
+use tether_core::diagram::{
+    self, data_dir, format_age, format_errors, match_query, to_mermaid_opts, CreateOpts, Diagram, DiagramInfo, DiagramStore, StoreError,
+    DEFAULT_KEEP_DAYS,
+};
 use tether_core::error::{Result, TetherError};
 use tether_core::herdr::Client;
 use tether_core::panes::{self, Scope, SplitOpts};
@@ -21,8 +25,38 @@ use crate::view;
 pub enum DiagramCmd {
     /// Validate a spec (JSON file or `-` for stdin), store it, print its id and open the viewer
     Create(CreateArgs),
-    /// List the diagrams stored in this worktree (.tether/diagrams/)
+    /// List the saved diagrams of this repo (newest first); `--all-repos` for every repo
     List(ListArgs),
+    /// Open a saved diagram in the viewer, by id or by a (partial, case-insensitive) title
+    Open(OpenArgs),
+    /// Star a diagram, by id or title words (starred diagrams are never pruned)
+    Star { id: String },
+    /// Remove the star of a diagram
+    Unstar { id: String },
+    /// Change a diagram's title (the id stays)
+    Rename {
+        /// Diagram id, or words of its title
+        id: String,
+        /// The new title
+        #[arg(required = true, num_args = 1..)]
+        title: Vec<String>,
+    },
+    /// Delete saved diagrams by id
+    #[command(alias = "delete")]
+    Rm {
+        #[arg(required = true, num_args = 1..)]
+        ids: Vec<String>,
+    },
+    /// Remove unstarred diagrams not opened or changed for `[diagrams] keep_days` days
+    Prune {
+        /// Only list what would be removed
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Print the folder this repo's diagrams are saved in
+    Path,
+    /// Browse the saved diagrams in a full-screen list with a live preview (same as `tether diagrams`)
+    Browse(crate::browse::BrowseArgs),
     /// Print the stored spec of a diagram as JSON
     Show { id: String },
     /// Export a diagram to another format
@@ -33,8 +67,6 @@ pub enum DiagramCmd {
         /// New spec: JSON file or `-` for stdin
         spec: String,
     },
-    /// Delete a stored diagram
-    Delete { id: String },
     /// Print a static render of a diagram (stored id or spec file) without a terminal
     Render(RenderArgs),
 }
@@ -63,6 +95,9 @@ pub struct CreateArgs {
     /// Switch to the new tab (default: do not steal focus)
     #[arg(long)]
     pub focus: bool,
+    /// Star the diagram so it is kept (never pruned)
+    #[arg(long)]
+    pub star: bool,
     /// Machine-readable result
     #[arg(long)]
     pub json: bool,
@@ -70,9 +105,31 @@ pub struct CreateArgs {
 
 #[derive(Args)]
 pub struct ListArgs {
-    /// JSON array: id, type, title, modified (unix seconds)
+    /// JSON array: id, type, title, starred, branch, worktree, repo, created/updated/last_opened/activity (unix seconds)
     #[arg(long)]
     pub json: bool,
+    /// Include the diagrams of every repo, not just this one
+    #[arg(long)]
+    pub all_repos: bool,
+    /// Only starred diagrams
+    #[arg(long)]
+    pub starred: bool,
+}
+
+#[derive(Args)]
+pub struct OpenArgs {
+    /// Diagram id, or words of its title (case-insensitive substring; must match exactly one diagram)
+    #[arg(required = true, num_args = 1..)]
+    pub query: Vec<String>,
+    /// Where to show it: `tab`, `split` or `here` (default: the viewer runs in this pane)
+    #[arg(long, value_name = "tab|split|here")]
+    pub placement: Option<String>,
+    /// Pane to split for `--placement split` (default: the current pane)
+    #[arg(long, value_name = "PANE")]
+    pub pane: Option<String>,
+    /// Switch to the new tab/pane (default: do not steal focus)
+    #[arg(long)]
+    pub focus: bool,
 }
 
 #[derive(Args)]
@@ -202,8 +259,18 @@ pub fn parse_placement(s: &str) -> Result<Placement> {
 
 /// Environment variables worth carrying into a pane we start (the new shell does not inherit our
 /// environment, only Herdr's).
-const FORWARDED_ENV: [&str; 8] =
-    ["TETHER_CONFIG", "TETHER_STATE", "TETHER_DOT", "TETHER_ICONS", "TETHER_NVIM", "TETHER_NVIM_WRAPPER", "TETHER_BIN", "XDG_RUNTIME_DIR"];
+const FORWARDED_ENV: [&str; 10] = [
+    "TETHER_CONFIG",
+    "TETHER_STATE",
+    "TETHER_DATA",
+    "TETHER_DOT",
+    "TETHER_ICONS",
+    "TETHER_NVIM",
+    "TETHER_NVIM_WRAPPER",
+    "TETHER_BIN",
+    "XDG_RUNTIME_DIR",
+    "XDG_DATA_HOME",
+];
 
 /// Script run by `sh -c` around the viewer: a failing viewer prints its error (already on stderr)
 /// and waits for enter, so the message is not lost when the pane closes. A normal quit (`q`,
@@ -274,27 +341,40 @@ pub fn run(c: DiagramCmd) -> Result<()> {
         DiagramCmd::Create(a) => create(a),
         DiagramCmd::List(a) => list(a),
         DiagramCmd::Show { id } => {
-            let d = DiagramStore::open(&cwd()?).get(&id).map_err(store_err)?;
+            let d = open_store()?.get(&id).map_err(store_err)?;
             println!("{}", serde_json::to_string_pretty(&d).map_err(|e| TetherError::Other(e.to_string()))?);
             Ok(())
         }
         DiagramCmd::Export(a) => {
             let _ = a.mermaid;
-            let d = DiagramStore::open(&cwd()?).get(&a.id).map_err(store_err)?;
+            let d = open_store()?.get(&a.id).map_err(store_err)?;
             print!("{}", to_mermaid_opts(&d, a.compat));
             Ok(())
         }
         DiagramCmd::Update { id, spec } => {
             let d = parse_and_check(&read_spec_text(&spec)?)?;
-            DiagramStore::open(&cwd()?).update(&id, &d).map_err(store_err)?;
+            open_store()?.update(&id, &d).map_err(store_err)?;
             println!("updated {id}");
             Ok(())
         }
-        DiagramCmd::Delete { id } => {
-            DiagramStore::open(&cwd()?).delete(&id).map_err(store_err)?;
-            println!("deleted {id}");
+        DiagramCmd::Open(a) => open(a),
+        DiagramCmd::Star { id } => set_star(&id, true),
+        DiagramCmd::Unstar { id } => set_star(&id, false),
+        DiagramCmd::Rename { id, title } => {
+            let title = title.join(" ");
+            let store = open_store()?;
+            let id = resolve_query(&store, &id)?.id;
+            store.rename(&id, &title).map_err(store_err)?;
+            println!("renamed {id} to \"{}\"", title.trim());
             Ok(())
         }
+        DiagramCmd::Rm { ids } => rm(&ids),
+        DiagramCmd::Prune { dry_run } => prune(dry_run),
+        DiagramCmd::Path => {
+            println!("{}", open_store()?.dir().display());
+            Ok(())
+        }
+        DiagramCmd::Browse(a) => crate::browse::run(a),
         DiagramCmd::Render(a) => render(a),
     }
 }
@@ -304,10 +384,10 @@ fn create(a: CreateArgs) -> Result<()> {
     let d = parse_and_check(&read_spec_text(&a.spec)?)?;
     let cfg = Config::load()?;
     let placement = parse_placement(a.open.as_deref().unwrap_or(&cfg.placement.diagram))?;
-    let store = DiagramStore::open(&cwd()?);
-    let id = store.create(&d).map_err(store_err)?;
+    let store = open_store_with(&cfg)?;
+    let id = store.create_with(&d, &CreateOpts { starred: a.star, note: None }).map_err(store_err)?;
     let path = store.dir().join(format!("{id}.json"));
-    let mut summary = json!({"ok": true, "id": id, "title": d.title(), "type": d.kind().as_str(), "path": path});
+    let mut summary = json!({"ok": true, "id": id, "title": d.title(), "type": d.kind().as_str(), "starred": a.star, "path": path});
     if placement == Placement::Here {
         if a.json {
             println!("{summary}");
@@ -335,32 +415,168 @@ fn create(a: CreateArgs) -> Result<()> {
     Ok(())
 }
 
+/// The store of the repo containing the cwd, with `[diagrams] keep_days` applied. A broken config
+/// does not stop a command that only reads or edits diagrams (the default retention applies).
+pub fn open_store() -> Result<DiagramStore> {
+    let keep = Config::load().map(|c| c.diagrams.keep_days).unwrap_or(DEFAULT_KEEP_DAYS);
+    Ok(DiagramStore::open(&cwd()?).with_keep_days(keep))
+}
+
+fn open_store_with(cfg: &Config) -> Result<DiagramStore> {
+    Ok(DiagramStore::open(&cwd()?).with_keep_days(cfg.diagrams.keep_days))
+}
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+}
+
+fn info_json(r: &DiagramInfo) -> serde_json::Value {
+    json!({
+        "id": r.id, "type": r.kind.as_str(), "title": r.title, "starred": r.starred,
+        "branch": r.branch, "worktree": r.worktree, "note": r.note,
+        "repo": r.repo, "repo_key": r.repo_key,
+        "created": r.created, "updated": r.updated, "last_opened": r.last_opened,
+        "activity": r.activity(),
+        "modified": r.updated,
+    })
+}
+
 fn list(a: ListArgs) -> Result<()> {
-    let rows = DiagramStore::open(&cwd()?).list().map_err(store_err)?;
-    let secs = |t: std::time::SystemTime| t.duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    let store = open_store()?;
+    // `list` also prunes (at most daily) and imports an old `.tether/diagrams/`; both report on stderr
+    let mut rows = store.list().map_err(store_err)?;
+    if a.all_repos {
+        for other in DiagramStore::all_repos(&data_dir()) {
+            if other.repo_key() != store.repo_key() {
+                rows.extend(other.rows().map_err(store_err)?);
+            }
+        }
+        rows.sort_by(|x, y| y.activity().cmp(&x.activity()).then_with(|| x.id.cmp(&y.id)));
+    }
+    if a.starred {
+        rows.retain(|r| r.starred);
+    }
     if a.json {
-        let v: Vec<_> = rows
-            .iter()
-            .map(|r| json!({"id": r.id, "type": r.kind.as_str(), "title": r.title, "modified": secs(r.mtime)}))
-            .collect();
-        println!("{}", serde_json::Value::Array(v));
+        println!("{}", serde_json::Value::Array(rows.iter().map(info_json).collect()));
         return Ok(());
     }
     if rows.is_empty() {
-        println!("no diagrams in this worktree");
+        let what = if a.starred { "no starred diagrams" } else { "no diagrams saved" };
+        if a.all_repos {
+            println!("{what} in any repo yet");
+        } else {
+            println!("{what} for {} (folder: {})", store.repo_name(), store.dir().display());
+        }
         return Ok(());
     }
+    let now = now_secs();
     let w = rows.iter().map(|r| r.id.len()).max().unwrap_or(2).max(2);
-    println!("{:<w$}  {:<9}  TITLE", "ID", "TYPE");
+    let bw = rows.iter().map(|r| r.branch.as_deref().unwrap_or("-").chars().count()).max().unwrap_or(6).clamp(6, 24);
+    let rw = if a.all_repos { rows.iter().map(|r| r.repo.chars().count()).max().unwrap_or(4).max(4) } else { 0 };
+    let repo_head = if a.all_repos { format!("{:<rw$}  ", "REPO") } else { String::new() };
+    println!("  {repo_head}{:<w$}  {:<9}  {:<bw$}  {:>4}  TITLE", "ID", "TYPE", "BRANCH", "AGE");
     for r in rows {
-        println!("{:<w$}  {:<9}  {}", r.id, r.kind.as_str(), r.title);
+        let star = if r.starred { "★" } else { " " };
+        let repo = if a.all_repos { format!("{:<rw$}  ", r.repo) } else { String::new() };
+        let branch: String = r.branch.as_deref().unwrap_or("-").chars().take(bw).collect();
+        println!("{star} {repo}{:<w$}  {:<9}  {:<bw$}  {:>4}  {}", r.id, r.kind.as_str(), branch, format_age(now, r.activity()), r.title);
+    }
+    Ok(())
+}
+
+/// Resolve `<id|title words>` against this repo's diagrams: exactly one match, or an exit-2 error that
+/// lists the candidates.
+pub fn resolve_query(store: &DiagramStore, query: &str) -> Result<DiagramInfo> {
+    let rows = store.rows().map_err(store_err)?;
+    let found = match_query(&rows, query);
+    match found.as_slice() {
+        [one] => Ok((*one).clone()),
+        [] => Err(TetherError::Input(format!(
+            "no saved diagram matches \"{query}\" in {}; run `tether diagram list` to see them",
+            store.repo_name()
+        ))),
+        many => {
+            let now = now_secs();
+            let mut msg = format!("\"{query}\" matches {} diagrams in {}; use the id or a longer title:", many.len(), store.repo_name());
+            for r in many {
+                msg.push_str(&format!(
+                    "\n  {}{}  {}  ({}, {})",
+                    if r.starred { "★ " } else { "" },
+                    r.id,
+                    r.title,
+                    r.kind.as_str(),
+                    format_age(now, r.activity())
+                ));
+            }
+            Err(TetherError::Input(msg))
+        }
+    }
+}
+
+fn open(a: OpenArgs) -> Result<()> {
+    let store = open_store()?;
+    let hit = resolve_query(&store, &a.query.join(" "))?;
+    super::view::open_stored(&store, &hit.id, a.placement.as_deref(), a.pane.as_deref(), a.focus)
+}
+
+fn set_star(id: &str, on: bool) -> Result<()> {
+    let store = open_store()?;
+    let id = resolve_query(&store, id)?.id;
+    let id = id.as_str();
+    let changed = store.set_starred(id, on).map_err(store_err)?;
+    let title = store.info(id).map(|i| i.title).unwrap_or_default();
+    match (on, changed) {
+        (true, true) => println!("starred {id}  {title}"),
+        (true, false) => println!("{id} was already starred"),
+        (false, true) => println!("unstarred {id}  {title}"),
+        (false, false) => println!("{id} was not starred"),
+    }
+    Ok(())
+}
+
+fn rm(ids: &[String]) -> Result<()> {
+    let store = open_store()?;
+    let mut failed: Vec<String> = Vec::new();
+    for id in ids {
+        match store.delete(id) {
+            Ok(()) => println!("deleted {id}"),
+            Err(e) => {
+                eprintln!("tether: error: {e}");
+                failed.push(id.clone());
+            }
+        }
+    }
+    if failed.is_empty() {
+        Ok(())
+    } else {
+        Err(TetherError::Input(format!("{} of {} not deleted: {}", failed.len(), ids.len(), failed.join(", "))))
+    }
+}
+
+fn prune(dry_run: bool) -> Result<()> {
+    let store = open_store()?;
+    let days = Config::load().map(|c| c.diagrams.keep_days).unwrap_or(DEFAULT_KEEP_DAYS);
+    if days == 0 {
+        println!("pruning is off ([diagrams] keep_days = 0); nothing removed");
+        return Ok(());
+    }
+    let gone = store.prune(dry_run).map_err(store_err)?;
+    if gone.is_empty() {
+        println!("nothing to prune (unstarred diagrams are kept {days} days from their last open or change)");
+        return Ok(());
+    }
+    let now = now_secs();
+    for r in &gone {
+        println!("{} {}  {}  (last active {} ago)", if dry_run { "would remove" } else { "removed" }, r.id, r.title, format_age(now, r.activity()));
+    }
+    if dry_run {
+        println!("{} diagram(s) would be removed; star the ones to keep with `tether diagram star <id>`", gone.len());
     }
     Ok(())
 }
 
 fn render(a: RenderArgs) -> Result<()> {
-    let cwd = cwd()?;
-    let store = DiagramStore::open(&cwd);
+    let store = open_store()?;
     let d = if Path::new(&a.target).is_file() {
         parse_spec(&read_spec_text(&a.target)?)?
     } else {

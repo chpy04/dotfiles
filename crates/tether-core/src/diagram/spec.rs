@@ -52,6 +52,14 @@ impl Diagram {
         }
     }
 
+    /// Replace the diagram title (the caller validates it is not empty).
+    pub fn set_title(&mut self, title: impl Into<String>) {
+        match self {
+            Diagram::Flowchart(f) => f.title = title.into(),
+            Diagram::Sequence(s) => s.title = title.into(),
+        }
+    }
+
     /// The `"type"` tag as a string (`flowchart` or `sequence`).
     pub fn kind(&self) -> DiagramKind {
         match self {

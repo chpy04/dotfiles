@@ -166,6 +166,7 @@ cat > "$TMP/launch.sh" <<L
 cd "$PROJ" || exit 1
 export PATH="$ROOT/target/debug:$ROOT/bin:\$PATH"
 export TETHER_STATE="$TMP/state.json" TETHER_CONFIG="$TMP/none.toml" XDG_RUNTIME_DIR="$TMP/run" TETHER_NVIM_WRAPPER="$TMP/nvim-wrapper.sh"
+export TETHER_DATA="$TMP/data"   # the diagram library stays in the temp dir
 unset CLAUDECODE CLAUDE_CODE_ENTRYPOINT
 exec claude --model $MODEL --permission-mode $PERMS
 L
@@ -177,7 +178,7 @@ WS="$SANDBOX_WORKSPACE_ID"; TAB1="$SANDBOX_TAB_ID"; PANE1="$SANDBOX_PANE_ID"
 if [ "$WS" = "w7" ] || [ "$WS" = "$INHERITED_WS" ] || [ "$PANE1" = "$INHERITED_PANE" ]; then echo "refusing: sandbox resolved to an inherited workspace/pane ($WS/$PANE1)"; WS=""; exit 1; fi
 echo "sandbox workspace $WS tab $TAB1 pane $PANE1 (inherited ws=$INHERITED_WS pane=$INHERITED_PANE)"
 
-t() { env HERDR_WORKSPACE_ID="$WS" HERDR_TAB_ID="$TAB1" HERDR_PANE_ID="$PANE1" TETHER_STATE="$TMP/state.json" \
+t() { env HERDR_WORKSPACE_ID="$WS" HERDR_TAB_ID="$TAB1" HERDR_PANE_ID="$PANE1" TETHER_STATE="$TMP/state.json" TETHER_DATA="$TMP/data" \
         TETHER_CONFIG="$TMP/none.toml" XDG_RUNTIME_DIR="$TMP/run" TETHER_NVIM_WRAPPER="$TMP/nvim-wrapper.sh" "$TETHER_BIN" "$@"; }
 tc() { (cd "$PROJ" && t "$@"); }
 tabs_json() { rpc tab.list "{\"workspace_id\":\"$WS\"}" | jq -c '.result.tabs | map({tab_id,number,label})'; }
@@ -246,14 +247,14 @@ NEWTAB=$(tabs_json | jq -r --arg a "$TAB1" --arg b "$HM_ID" '.[] | select(.tab_i
 [ -n "$NEWTAB" ] && ok "(a) a new tab about session refresh exists: $NEWTAB \"$(tabs_json | jq -r --arg t "$NEWTAB" '.[] | select(.tab_id==$t) | .label')\"" || bad "(a) no new tab with a session/refresh/token label" "$(tabs_json)"
 check "(a) it is recorded as tether-made in TETHER_STATE" "$(jq -r --arg w "$WS" --arg t "${NEWTAB:-none}" '[.workspaces[$w].tabs[]? | select(.tab_id==$t)] | length' "$TMP/state.json" 2>/dev/null)" 1
 # (b) its pane runs `tether view <id>`
-DIAG_DIR="$PROJ/.tether/diagrams"
+DIAG_DIR="$(tc diagram path)"
 NDIAG=$(ls "$DIAG_DIR"/*.json 2>/dev/null | wc -l | tr -d ' ')
 VIEW_CMD=$(echo "$LAY" | jq -r --arg t "${NEWTAB:-none}" '.tabs[] | select((.tab_id // .id)==$t) | .panes[] | .command' | head -3)
 echo "       viewer pane command: $VIEW_CMD"
 echo "$VIEW_CMD" | grep -Eq 'tether( |.*[ /])view [A-Za-z0-9_.-]+' && ok "(b) the new tab's pane runs \`tether view <id>\`" || bad "(b) pane command is not tether view" "$VIEW_CMD"
 VIEW_ID=$(echo "$VIEW_CMD" | grep -Eo 'view [A-Za-z0-9_.-]+' | head -1 | cut -d' ' -f2)
 # (c) a valid flowchart, with anchors that point at real lines
-if [ "$NDIAG" -ge 1 ]; then ok "(c) .tether/diagrams/ has $NDIAG diagram(s)"; else bad "(c) no diagram stored"; fi
+if [ "$NDIAG" -ge 1 ]; then ok "(c) the per-repo library ($DIAG_DIR) has $NDIAG diagram(s)"; else bad "(c) no diagram stored"; fi
 ID="${VIEW_ID:-$(ls "$DIAG_DIR" 2>/dev/null | head -1 | sed 's/\.json$//')}"
 SPEC=$(tc diagram show "$ID" 2>"$TMP/show.err"); [ -n "$SPEC" ] || bad "(c) tether diagram show $ID failed" "$(cat "$TMP/show.err")"
 echo "$SPEC" > "$OUT/diagram.json"

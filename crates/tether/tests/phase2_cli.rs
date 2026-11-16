@@ -21,6 +21,8 @@ impl Env {
             .env("HERDR_TAB_ID", "w1:t1")
             .env("HERDR_PANE_ID", "w1:p1")
             .env("TETHER_STATE", self.dir.path().join("state.json"))
+            // never touch the real diagram library
+            .env("TETHER_DATA", self.dir.path().join("tether-data"))
             .env("TETHER_CONFIG", self.dir.path().join("config.toml"))
             .env("XDG_RUNTIME_DIR", self.dir.path())
             .current_dir(self.dir.path());

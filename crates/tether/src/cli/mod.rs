@@ -45,11 +45,13 @@ enum Command {
     /// Open code in Neovim
     #[command(subcommand)]
     Code(code::CodeCmd),
-    /// Create, list, show, export, update or delete diagrams (flowcharts, sequence diagrams)
+    /// Create, list, open, star, rename, delete, prune, show, export or update diagrams (flowcharts, sequence diagrams)
     #[command(subcommand)]
     Diagram(diagram::DiagramCmd),
     /// Show a stored diagram in the viewer (in this pane, or --placement tab|split)
     View(view::ViewArgs),
+    /// Browse the saved diagrams: list, live preview, star, rename, delete, open
+    Diagrams(crate::browse::BrowseArgs),
 }
 
 /// Whether the user asked for JSON output (decides how errors are reported).
@@ -63,7 +65,7 @@ fn wants_json(cmd: &Command) -> bool {
         Command::Split(a) => a.json,
         Command::Code(c) => c.wants_json(),
         Command::Diagram(c) => c.wants_json(),
-        Command::View(_) => false,
+        Command::View(_) | Command::Diagrams(_) => false,
     }
 }
 
@@ -80,6 +82,7 @@ pub fn run() -> i32 {
         Command::Code(c) => code::run(c),
         Command::Diagram(c) => diagram::run(c),
         Command::View(a) => view::run(a),
+        Command::Diagrams(a) => crate::browse::run(a),
     };
     match result {
         Ok(()) => exit::OK,

@@ -116,6 +116,16 @@ pub enum Action {
     Up,
     Left,
     Right,
+    /// Flowchart: step forward along the highlighted outgoing edge.
+    StepForward,
+    /// Flowchart: step back along the edge we came by (else the first parent).
+    StepBack,
+    /// Flowchart: switch to the previous / next sibling branch.
+    BranchPrev,
+    BranchNext,
+    /// Jump list back / forward.
+    JumpBack,
+    JumpForward,
     First,
     Last,
     HalfDown,
@@ -127,6 +137,8 @@ pub enum Action {
     SearchPrev,
     Quit,
     Help,
+    /// Star / unstar the diagram.
+    Star,
     Comment,
     CommentPick,
     Clear,
@@ -148,18 +160,40 @@ pub struct Keymap {
 }
 
 impl Keymap {
-    pub fn from_keys(k: &Keys) -> Result<Keymap, String> {
+    /// The keymap of a flowchart (`flow`) or of a sequence diagram. They share everything but the
+    /// movement keys: a flowchart steps along arrows (`view_flow_*`), a sequence diagram moves
+    /// between messages and participants (`view_down` & co). All keys are validated either way.
+    pub fn from_keys(k: &Keys, flow: bool) -> Result<Keymap, String> {
         let mut binds: Vec<(Vec<Chord>, Action)> = Vec::new();
+        let movement = [
+            (&k.view_down, Action::Down, "view_down", false),
+            (&k.view_up, Action::Up, "view_up", false),
+            (&k.view_left, Action::Left, "view_left", false),
+            (&k.view_right, Action::Right, "view_right", false),
+            (&k.view_flow_forward, Action::StepForward, "view_flow_forward", true),
+            (&k.view_flow_back, Action::StepBack, "view_flow_back", true),
+            (&k.view_flow_branch_next, Action::BranchNext, "view_flow_branch_next", true),
+            (&k.view_flow_branch_prev, Action::BranchPrev, "view_flow_branch_prev", true),
+            (&k.view_flow_left, Action::Left, "view_flow_left", true),
+            (&k.view_flow_down, Action::Down, "view_flow_down", true),
+            (&k.view_flow_up, Action::Up, "view_flow_up", true),
+            (&k.view_flow_right, Action::Right, "view_flow_right", true),
+        ];
+        for (s, a, name, is_flow) in movement {
+            let seq = parse_keyseq(s, &k.leader).map_err(|e| format!("keys.{name}: {e}"))?;
+            if is_flow == flow {
+                binds.push((seq, a));
+            }
+        }
         let configured = [
-            (&k.view_down, Action::Down, "view_down"),
-            (&k.view_up, Action::Up, "view_up"),
-            (&k.view_left, Action::Left, "view_left"),
-            (&k.view_right, Action::Right, "view_right"),
+            (&k.view_jump_back, Action::JumpBack, "view_jump_back"),
+            (&k.view_jump_forward, Action::JumpForward, "view_jump_forward"),
             (&k.view_open, Action::Open, "view_open"),
             (&k.view_details, Action::Details, "view_details"),
             (&k.view_search, Action::Search, "view_search"),
             (&k.view_search_next, Action::SearchNext, "view_search_next"),
             (&k.view_quit, Action::Quit, "view_quit"),
+            (&k.view_star, Action::Star, "view_star"),
             (&k.comment, Action::Comment, "comment"),
             (&k.comment_pick, Action::CommentPick, "comment_pick"),
         ];
@@ -237,14 +271,28 @@ mod tests {
 
     #[test]
     fn default_keymap_matches_and_prefixes() {
-        let km = Keymap::from_keys(&Keys::default()).unwrap();
-        assert_eq!(km.lookup(&[Chord::ch('j')]), Match::Action(Action::Down));
+        let km = Keymap::from_keys(&Keys::default(), true).unwrap();
+        let seq = Keymap::from_keys(&Keys::default(), false).unwrap();
+        assert_eq!(seq.lookup(&[Chord::ch('j')]), Match::Action(Action::Down));
+        assert_eq!(seq.lookup(&[Chord::ch('l')]), Match::Action(Action::Right));
+        assert_eq!(seq.lookup(&[Chord::ch('J')]), Match::None, "flowchart keys are not bound in sequence diagrams");
+        assert_eq!(km.lookup(&[Chord::ch('j')]), Match::Action(Action::BranchNext));
         assert_eq!(km.lookup(&[Chord::ch(' ')]), Match::Prefix);
         assert_eq!(km.lookup(&[Chord::ch(' '), Chord::ch('a')]), Match::Prefix);
         assert_eq!(km.lookup(&[Chord::ch(' '), Chord::ch('a'), Chord::ch('c')]), Match::Action(Action::Comment));
         assert_eq!(km.lookup(&[Chord::ch(' '), Chord::ch('a'), Chord::ch('C')]), Match::Action(Action::CommentPick));
         assert_eq!(km.lookup(&[Chord::ch(' '), Chord::ch('z')]), Match::None);
         assert_eq!(km.lookup(&[Chord::ch('G')]), Match::Action(Action::Last));
+        assert_eq!(km.lookup(&[Chord::ch('l')]), Match::Action(Action::StepForward));
+        assert_eq!(km.lookup(&[Chord::ch('h')]), Match::Action(Action::StepBack));
+        assert_eq!(km.lookup(&[Chord::ch('k')]), Match::Action(Action::BranchPrev));
+        assert_eq!(km.lookup(&[Chord::ch('H')]), Match::Action(Action::Left));
+        assert_eq!(km.lookup(&[Chord::ch('J')]), Match::Action(Action::Down));
+        assert_eq!(km.lookup(&[Chord::ch('K')]), Match::Action(Action::Up));
+        assert_eq!(km.lookup(&[Chord::ch('L')]), Match::Action(Action::Right));
+        let ctrl = |c| Chord { code: KeyCode::Char(c), ctrl: true };
+        assert_eq!(km.lookup(&[ctrl('o')]), Match::Action(Action::JumpBack));
+        assert_eq!(km.lookup(&[ctrl('i')]), Match::Action(Action::JumpForward));
         assert_eq!(km.hint(Action::Comment), "␣ac");
         let c = km.continuations(&[Chord::ch(' '), Chord::ch('a')]);
         assert_eq!(c.len(), 2);
@@ -253,9 +301,9 @@ mod tests {
     #[test]
     fn custom_leader_and_bad_config() {
         let k = Keys { leader: ",".into(), ..Keys::default() };
-        let km = Keymap::from_keys(&k).unwrap();
+        let km = Keymap::from_keys(&k, true).unwrap();
         assert_eq!(km.lookup(&[Chord::ch(','), Chord::ch('a'), Chord::ch('c')]), Match::Action(Action::Comment));
         let k = Keys { view_down: "<nope>".into(), ..Keys::default() };
-        assert!(Keymap::from_keys(&k).unwrap_err().contains("keys.view_down"));
+        assert!(Keymap::from_keys(&k, true).unwrap_err().contains("keys.view_down"));
     }
 }

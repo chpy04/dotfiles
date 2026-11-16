@@ -17,6 +17,10 @@ vim.api.nvim_create_user_command("TetherCommentPick", function(o)
   require("tether").comment_pick({ range = range })
 end, { range = true, desc = "tether: comment on this line/range to a picked agent" })
 
+vim.api.nvim_create_user_command("TetherDiagrams", function()
+  require("tether").diagrams()
+end, { desc = "tether: pick a saved diagram of this repo and open it in a Herdr tab" })
+
 if vim.g.tether_auto_register ~= false then
   require("tether.server").setup()
 end

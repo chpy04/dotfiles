@@ -349,7 +349,8 @@ fn store_round_trip_with_fixtures_in_temp_git_repo() {
         .status()
         .unwrap()
         .success());
-    let store = DiagramStore::open(repo.path());
+    let data = tempfile::tempdir().unwrap();
+    let store = DiagramStore::open_at(repo.path(), data.path());
     let mut ids = Vec::new();
     for f in [
         "prd_flowchart.json",

@@ -34,6 +34,8 @@ pub const PAD_Y: u16 = 1;
 /// Rows used by the header and by the status + hint lines.
 pub const HEADER_ROWS: u16 = 1;
 pub const FOOTER_ROWS: u16 = 2;
+/// Longest jump list kept.
+pub const JUMP_LIMIT: usize = 100;
 
 // ------------------------------------------------------------------------------------ effects
 
@@ -41,11 +43,14 @@ pub const FOOTER_ROWS: u16 = 2;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Effect {
     /// `tether code open <abs path>:<line> --from <pane>`.
-    OpenCode { abs_path: PathBuf, rel_path: String, line: u32, from_pane: Option<String> },
+    /// `focus`: also pass `--focus` so the Neovim pane gets focus.
+    OpenCode { abs_path: PathBuf, rel_path: String, line: u32, from_pane: Option<String>, focus: bool },
     /// `tether send --to <to> --diagram <id> --node <node> --text-file -` with `text` on stdin.
     Send { to: String, diagram: String, node: String, text: String },
     /// `tether agents --json`.
     FetchAgents,
+    /// `tether diagram star|unstar <diagram>`.
+    Star { diagram: String, on: bool },
     /// Leave the viewer.
     Quit,
 }
@@ -55,11 +60,14 @@ impl Effect {
     pub fn argv(&self) -> Option<Vec<String>> {
         let s = |x: &str| x.to_string();
         match self {
-            Effect::OpenCode { abs_path, line, from_pane, .. } => {
+            Effect::OpenCode { abs_path, line, from_pane, focus, .. } => {
                 let mut v = vec![s("code"), s("open"), format!("{}:{}", abs_path.display(), line)];
                 if let Some(p) = from_pane {
                     v.push(s("--from"));
                     v.push(p.clone());
+                }
+                if *focus {
+                    v.push(s("--focus"));
                 }
                 Some(v)
             }
@@ -75,6 +83,7 @@ impl Effect {
                 s("-"),
             ]),
             Effect::FetchAgents => Some(vec![s("agents"), s("--json")]),
+            Effect::Star { diagram, on } => Some(vec![s("diagram"), s(if *on { "star" } else { "unstar" }), diagram.clone()]),
             Effect::Quit => None,
         }
     }
@@ -97,6 +106,8 @@ pub enum Msg {
     SendDone { result: Result<String, String>, node: ObjectId, to: String, text: String },
     /// `agents --json` finished.
     Agents(Result<Vec<AgentRow>, String>),
+    /// `diagram star|unstar` finished; `on` is the state that was asked for.
+    StarDone { result: Result<String, String>, on: bool },
 }
 
 // ------------------------------------------------------------------------------------ modes
@@ -173,6 +184,8 @@ pub struct AppInit {
     pub theme: Theme,
     pub icons: Icons,
     pub pane_id: Option<String>,
+    /// Enter focuses the Neovim pane (`[view] focus_code`).
+    pub focus_code: bool,
     /// Terminal size `(cols, rows)`.
     pub term: (u16, u16),
     pub engine: Engine,
@@ -193,6 +206,15 @@ pub struct App {
     pub elements: HashMap<ObjectId, Element>,
     pub came_from: HashMap<ObjectId, ObjectId>,
     pub branch: HashMap<ObjectId, ObjectId>,
+    /// Flowchart `J`/`K` column memory (like vim's curswant): the x the vertical run started at.
+    pub col_ref: Option<i32>,
+    /// Focus history for the jump list (`Ctrl-o` / `Ctrl-i`): visited objects, oldest first.
+    pub history: Vec<ObjectId>,
+    /// Index of the current focus in `history`.
+    pub hpos: usize,
+    pub focus_code: bool,
+    /// The diagram is starred (set by the runner from the library; `s` toggles it).
+    pub starred: bool,
     pub(super) seq_cursor: usize,
     pub term: (u16, u16),
     pub scroll_x: u16,
@@ -217,11 +239,11 @@ fn compute_layout(d: &Diagram, expanded: &HashSet<ObjectId>, engine: Engine) -> 
 
 impl App {
     pub fn new(init: AppInit) -> Result<App, String> {
-        let keymap = Keymap::from_keys(&init.keys)?;
         let expanded = HashSet::new();
         let layout = compute_layout(&init.diagram, &expanded, init.engine)?;
         let elements: HashMap<ObjectId, Element> =
             diagram::elements(&init.diagram).into_iter().map(|e| (ObjectId(e.id.clone()), e)).collect();
+        let keymap = Keymap::from_keys(&init.keys, matches!(layout.nav, layout::Nav::Flow(_)))?;
         let focus = match &layout.nav {
             layout::Nav::Flow(n) => n.roots.first().or(n.order.first()).cloned(),
             layout::Nav::Seq(n) => n.items.first().or(n.participants.first()).cloned(),
@@ -241,6 +263,11 @@ impl App {
             elements,
             came_from: HashMap::new(),
             branch: HashMap::new(),
+            col_ref: None,
+            history: Vec::new(),
+            hpos: 0,
+            focus_code: init.focus_code,
+            starred: false,
             seq_cursor: 0,
             term: init.term,
             scroll_x: 0,
@@ -256,6 +283,7 @@ impl App {
             failed_draft: None,
             engine: init.engine,
         };
+        app.history.push(app.focus.clone());
         app.sync_cursor();
         app.ensure_visible_focus();
         Ok(app)
@@ -455,14 +483,60 @@ impl App {
         }
     }
 
-    /// Focus `id` (must be a focusable object) and scroll it into view.
+    /// Focus `id` (must be a focusable object), scroll it into view and record it in the jump
+    /// list. Also forgets the `j`/`k` column memory (the vertical movement re-sets it).
     pub fn set_focus(&mut self, id: ObjectId) {
+        if self.focus_raw(id) {
+            self.col_ref = None;
+            self.note_focus();
+        }
+    }
+
+    /// Focus without touching the jump list or column memory; false when `id` is not focusable.
+    pub(super) fn focus_raw(&mut self, id: ObjectId) -> bool {
         if self.layout.object(id.as_str()).is_none() {
-            return;
+            return false;
         }
         self.focus = id;
         self.sync_cursor();
         self.ensure_visible_focus();
+        true
+    }
+
+    /// Push the current focus onto the jump list (dropping any forward entries), unless it is
+    /// already the current entry. The list is capped at [`JUMP_LIMIT`].
+    pub(super) fn note_focus(&mut self) {
+        if self.history.get(self.hpos) == Some(&self.focus) {
+            return;
+        }
+        self.history.truncate(self.hpos + 1);
+        self.history.push(self.focus.clone());
+        if self.history.len() > JUMP_LIMIT {
+            let extra = self.history.len() - JUMP_LIMIT;
+            self.history.drain(..extra);
+        }
+        self.hpos = self.history.len() - 1;
+    }
+
+    /// `Ctrl-o` (`back`) / `Ctrl-i`: walk the jump list without recording the visit.
+    pub(super) fn jump_list(&mut self, back: bool) {
+        // entries can go stale after a relayout; skip anything that is no longer focusable
+        loop {
+            let next = if back { self.hpos.checked_sub(1) } else { Some(self.hpos + 1).filter(|&i| i < self.history.len()) };
+            let Some(i) = next else {
+                self.set_status(StatusKind::Info, if back { "oldest position in the jump list" } else { "newest position in the jump list" });
+                return;
+            };
+            self.hpos = i;
+            let id = self.history[i].clone();
+            if id == self.focus {
+                continue;
+            }
+            if self.focus_raw(id) {
+                self.col_ref = None;
+                return;
+            }
+        }
     }
 
     // ---------------------------------------------------------------- lazy link resolution
@@ -560,7 +634,15 @@ impl App {
 
     fn run_action(&mut self, a: Action) -> Vec<Effect> {
         match a {
-            Action::Down | Action::Up | Action::Left | Action::Right => return self.navigate(a),
+            Action::Down
+            | Action::Up
+            | Action::Left
+            | Action::Right
+            | Action::StepForward
+            | Action::StepBack
+            | Action::BranchPrev
+            | Action::BranchNext => return self.navigate(a),
+            Action::JumpBack | Action::JumpForward => self.jump_list(a == Action::JumpBack),
             Action::First | Action::Last => return self.jump_end(a == Action::Last),
             Action::HalfDown => {
                 let h = (self.body_size().1 / 2).max(1) as i32;
@@ -579,6 +661,11 @@ impl App {
             Action::SearchPrev => self.next_match(-1),
             Action::Quit => return vec![Effect::Quit],
             Action::Help => self.mode = Mode::Help,
+            Action::Star => {
+                // optimistic: the header shows the new state at once, a failure puts it back
+                self.starred = !self.starred;
+                return vec![Effect::Star { diagram: self.diagram_id.clone(), on: self.starred }];
+            }
             Action::Comment => self.start_comment("primary".into()),
             Action::CommentPick => return self.start_picker(),
             Action::Clear => {
@@ -633,6 +720,7 @@ impl App {
             rel_path: code.path.clone(),
             line,
             from_pane: app.pane_id.clone(),
+            focus: app.focus_code,
         };
         match r {
             Resolved::Exact(l) => {
@@ -684,10 +772,13 @@ impl App {
             Edit::Cancel => {
                 self.matches.clear();
                 self.search_query.clear();
-                self.set_focus(st.origin);
+                self.focus_raw(st.origin);
+                self.col_ref = None;
                 return vec![];
             }
             Edit::Submit => {
+                self.col_ref = None;
+                self.note_focus();
                 if self.search_query.is_empty() {
                     self.matches.clear();
                 } else if self.matches.is_empty() {
@@ -716,10 +807,10 @@ impl App {
                 .or_else(|| self.matches.first())
                 .cloned();
             if let Some(t) = target {
-                self.set_focus(t);
+                self.focus_raw(t);
             }
         } else {
-            self.set_focus(st.origin.clone());
+            self.focus_raw(st.origin.clone());
         }
         self.mode = Mode::Search(st);
         vec![]
@@ -853,6 +944,13 @@ impl App {
                     p.rows = Some(rows);
                     p.error = None;
                 }
+            }
+            Msg::StarDone { result: Ok(_), on } => {
+                self.set_status(StatusKind::Ok, if on { "★ starred: kept until you unstar it" } else { "unstarred" })
+            }
+            Msg::StarDone { result: Err(e), on } => {
+                self.starred = !on;
+                self.set_status(StatusKind::Error, format!("{} failed: {e}", if on { "star" } else { "unstar" }));
             }
             Msg::Agents(Err(e)) => {
                 if let Mode::Picker(p) = &mut self.mode {

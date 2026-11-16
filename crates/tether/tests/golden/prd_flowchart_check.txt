@@ -11,4 +11,4 @@
   ╰─────────────────────────╯      ╰────────────────────╯
 
 
- hjkl move · ⏎ code · tab details · ␣ac ask · / search
+ h/l step · j/k branch · ⏎ code · tab details · ␣ac ask

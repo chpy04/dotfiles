@@ -10,6 +10,10 @@ echo "== plugin tests =="
 TETHER_TEST_FILE="$HERE/test_comment.lua" nvim --headless -u "$HERE/minimal_init.lua" </dev/null 2>&1
 [ $? -eq 0 ] || rc=1
 
+echo "== diagram picker tests =="
+TETHER_TEST_FILE="$HERE/test_diagrams.lua" nvim --headless -u "$HERE/minimal_init.lua" </dev/null 2>&1
+[ $? -eq 0 ] || rc=1
+
 echo "== tether-nvim wrapper tests =="
 bash "$HERE/test_wrapper.sh" || rc=1
 

@@ -5,6 +5,7 @@ local M = {}
 local config = require("tether.config")
 local float = require("tether.float")
 local picker = require("tether.picker")
+local diagrams = require("tether.diagrams")
 
 M.opts = nil
 M._setup_done = false
@@ -61,10 +62,12 @@ local function ref_for(cap)
 end
 
 --- Run tether asynchronously; cb(code, stdout, stderr). Never blocks the editor.
-local function run_tether(args, cb)
+--- `sys_opts` (optional) is merged into the vim.system options (e.g. cwd).
+local function run_tether(args, cb, sys_opts)
   local argv = { M.opts.bin }
   vim.list_extend(argv, args)
-  local ok, err = pcall(vim.system, argv, { text = true, timeout = M.opts.timeout_ms }, function(res)
+  local sopts = vim.tbl_extend("force", { text = true, timeout = M.opts.timeout_ms }, sys_opts or {})
+  local ok, err = pcall(vim.system, argv, sopts, function(res)
     vim.schedule(function()
       cb(res.code, res.stdout or "", res.stderr or "")
     end)
@@ -222,6 +225,65 @@ function M.comment_pick(opts)
   end)
 end
 
+--- Why `tether` failed, in one line (without the `tether: error:` prefix).
+local function why(stderr, fallback)
+  local w = vim.trim(stderr or ""):gsub("tether: error: ", "")
+  w = first_line(w)
+  return w ~= "" and w or fallback
+end
+
+--- Pick one of this repo's saved diagrams and open it in a new tether tab. Asynchronous: the list
+--- is fetched in the background, the tab is opened by a background `tether view`.
+function M.diagrams()
+  if not M.opts then
+    M.setup()
+  end
+  if not in_herdr() then
+    return notify(
+      "not inside Herdr (HERDR_ENV is not 1): diagrams open in a Herdr tab; run Neovim in a Herdr pane",
+      vim.log.levels.ERROR
+    )
+  end
+  local cwd = vim.fn.getcwd()
+  run_tether({ "diagram", "list", "--json" }, function(code, stdout, stderr)
+    local rows, perr
+    if code == 0 then
+      rows, perr = diagrams.parse(stdout)
+    end
+    if not rows then
+      return notify(
+        "cannot list diagrams: " .. (code == 0 and perr or why(stderr, "tether diagram list failed")),
+        vim.log.levels.ERROR
+      )
+    end
+    if #rows == 0 then
+      return notify(
+        "no saved diagrams for this repo yet (ask Claude to draw one, or `tether diagram create spec.json`)",
+        vim.log.levels.WARN
+      )
+    end
+    diagrams.pick(rows, function(choice)
+      if not choice then
+        return
+      end
+      run_tether({ "view", choice.id, "--placement", "tab" }, function(vcode, vout, verr)
+        if vcode == 0 then
+          local msg = first_line(vout)
+          notify(msg ~= "" and msg or ("opened " .. (choice.title or choice.id)))
+        else
+          notify(
+            ("cannot open diagram \"%s\": %s"):format(
+              choice.title or choice.id,
+              M.describe_failure(vcode, verr, M.opts.timeout_ms)
+            ),
+            vim.log.levels.ERROR
+          )
+        end
+      end, { cwd = cwd })
+    end)
+  end, { cwd = cwd })
+end
+
 local function unmap_all()
   for _, m in ipairs(mapped) do
     pcall(vim.keymap.del, m[1], m[2])
@@ -248,6 +310,9 @@ local function apply_keys()
   map({ "n", "x" }, keys.comment_pick, function()
     M.comment_pick()
   end, "tether: comment on line/selection to a picked agent")
+  map({ "n" }, keys.diagrams, function()
+    M.diagrams()
+  end, "tether: open a saved diagram of this repo in a tab")
 end
 
 --- The CLI config arrived (asynchronously): remap if it asks for other keys than we mapped.

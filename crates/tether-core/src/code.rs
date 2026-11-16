@@ -311,6 +311,10 @@ pub fn open(client: &Client, store: &StateStore, scope: &Scope, editor: &dyn Edi
     // 3. jump (also after a fresh start: confirms the position and applies the range highlight)
     let at = editor.jump(&pane_id, &o.file, r.line, r.end_line)?;
     if o.focus {
+        // the Neovim pane itself, reused or newly split; a pane in another tab needs that tab shown first
+        if scope.tab_id.as_deref() != Some(tab.tab_id.as_str()) {
+            client.tab_focus(&tab.tab_id)?;
+        }
         client.pane_focus(&pane_id)?;
     }
     if summary.is_empty() {
@@ -414,7 +418,7 @@ mod tests {
             }
             "pane.split" => Ok(json!({"type":"pane_info","pane":{"pane_id":"w1:p9","workspace_id":"w1","tab_id":"w1:t4"}})),
             "pane.process_info" => Ok(json!({"type":"pane_process_info","process_info":{"pane_id":params["pane_id"],"foreground_processes":[{"pid":1,"name":"zsh","argv":["zsh"]}]}})),
-            "pane.send_input" | "pane.focus" => Ok(json!({"type":"ok"})),
+            "pane.send_input" | "pane.focus" | "tab.focus" => Ok(json!({"type":"ok"})),
             _ => Err(("invalid_request".into(), method.to_string())),
         })
     }
@@ -437,6 +441,18 @@ mod tests {
         r: &str,
         seed: &[(&str, &str, u64)],
     ) -> (Result<CodeOpened>, Vec<String>) {
+        run_seeded_focus(f, ed, in_tab, from, r, seed, false)
+    }
+
+    fn run_seeded_focus(
+        f: &FakeHerdr,
+        ed: &MockEditor,
+        in_tab: Option<&str>,
+        from: Option<&str>,
+        r: &str,
+        seed: &[(&str, &str, u64)],
+        focus: bool,
+    ) -> (Result<CodeOpened>, Vec<String>) {
         let d = tempfile::tempdir().unwrap();
         let file = d.path().join("a.ts");
         std::fs::write(&file, "x\n").unwrap();
@@ -451,7 +467,7 @@ mod tests {
             &store,
             &scope(),
             ed,
-            &CodeOpen { reference: &reference, file, in_tab, from, focus: false, ready_timeout: Duration::from_millis(50), wrapper: "/repo/bin/tether-nvim".into(), placement: &placement },
+            &CodeOpen { reference: &reference, file, in_tab, from, focus, ready_timeout: Duration::from_millis(50), wrapper: "/repo/bin/tether-nvim".into(), placement: &placement },
         );
         let owned = store.owned_tabs("w1").into_iter().map(|t| t.tab_id).collect();
         (res, owned)
@@ -492,6 +508,40 @@ mod tests {
         let ed = MockEditor { ready_after_split: true, ..Default::default() };
         let (r, _) = run_seeded(&f, &ed, None, None, "a.ts:7", &[("w1:t4", "diagram", 100)]);
         assert!(r.unwrap().tab_created);
+    }
+
+    // ---- --focus puts focus on the Neovim pane itself, in every case ----
+
+    fn focused(f: &FakeHerdr) -> Vec<String> {
+        f.requests_for("pane.focus").iter().map(|r| r.params["pane_id"].as_str().unwrap().to_string()).collect()
+    }
+
+    #[test]
+    fn focus_goes_to_the_neovim_pane_when_it_is_reused_or_newly_split_or_in_a_new_tab() {
+        // reused (same tab as the caller's pane is not needed: target tab "diagram")
+        let f = fake();
+        let ed = MockEditor { alive: ["w1:p5".to_string()].into(), ..Default::default() };
+        run_seeded_focus(&f, &ed, Some("diagram"), None, "a.ts:7", &[], true).0.unwrap();
+        assert_eq!(focused(&f), ["w1:p5"], "reuse: the Neovim pane gets focus");
+        assert_eq!(f.requests_for("tab.focus").len(), 1, "it lives in another tab than the caller: that tab is shown");
+        // newly split
+        let f = fake();
+        let ed = MockEditor { ready_after_split: true, ..Default::default() };
+        let r = run_seeded_focus(&f, &ed, None, Some("w1:p1"), "a.ts:7", &[], true).0.unwrap();
+        assert!(!r.reused);
+        assert_eq!(focused(&f), ["w1:p9"], "split: the new Neovim pane gets focus, not the pane it was split from");
+        assert!(f.requests_for("tab.focus").is_empty(), "same tab as the caller");
+        // new tab (primary agent's tab is never split)
+        let f = fake_ex(true);
+        let ed = MockEditor { ready_after_split: true, ..Default::default() };
+        let r = run_seeded_focus(&f, &ed, None, None, "a.ts:7", &[], true).0.unwrap();
+        assert!(r.tab_created);
+        assert_eq!(focused(&f), ["w1:p20"]);
+        // without --focus nothing is focused
+        let f = fake();
+        let ed = MockEditor { ready_after_split: true, ..Default::default() };
+        run_seeded_focus(&f, &ed, None, Some("w1:p1"), "a.ts:7", &[], false).0.unwrap();
+        assert!(focused(&f).is_empty() && f.requests_for("tab.focus").is_empty());
     }
 
     #[test]
