@@ -8,6 +8,7 @@ set -euo pipefail
 #   ./install.sh             # link everything
 #   ./install.sh --brew      # brew bundle install first, then link
 #   ./install.sh --dry-run   # preview what would be linked
+#   ./install.sh --no-tether # skip building/linking tether
 # ──────────────────────────────────────────────────────────────────────────────
 
 DOTFILES_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -22,6 +23,7 @@ NC='\033[0m'
 
 DRY_RUN=false
 RUN_BREW=false
+RUN_TETHER=true
 LINKED=0
 SKIPPED=0
 BACKED_UP=0
@@ -141,6 +143,22 @@ install_links() {
     fi
 }
 
+install_tether() {
+    echo ""
+    echo -e "${BOLD}── tether ──${NC}"
+    echo ""
+
+    # Builds tether/target/release/tether and symlinks it, tether-nvim and the
+    # Claude skill into ~/.local/bin and ~/.claude/skills. Safe to repeat.
+    local args=()
+    $DRY_RUN && args+=(--dry-run)
+    if ! command -v cargo &>/dev/null && [ ! -f "$HOME/.cargo/env" ]; then
+        err "cargo not found; run with --brew (installs rust) or skip with --no-tether"
+        return 1
+    fi
+    "$DOTFILES_DIR/tether/scripts/install.sh" "${args[@]+"${args[@]}"}"
+}
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Dependency checks
 # ──────────────────────────────────────────────────────────────────────────────
@@ -152,7 +170,7 @@ check_dependencies() {
     echo -e "${BOLD}── Checking dependencies ──${NC}"
     echo ""
 
-    for cmd in brew git nvim aerospace herdr; do
+    for cmd in brew git nvim aerospace herdr cargo dot; do
         if command -v "$cmd" &>/dev/null; then
             ok "$cmd found: $(command -v "$cmd")"
         else
@@ -204,17 +222,19 @@ main() {
         case "$arg" in
             --dry-run) DRY_RUN=true ;;
             --brew) RUN_BREW=true ;;
+            --no-tether) RUN_TETHER=false ;;
             -h|--help)
-                echo "Usage: ./install.sh [--dry-run] [--brew]"
+                echo "Usage: ./install.sh [--dry-run] [--brew] [--no-tether]"
                 echo ""
                 echo "Options:"
                 echo "  --dry-run   Preview what would be linked without making changes"
                 echo "  --brew      Run brew bundle install on brew/Brewfile before linking"
+                echo "  --no-tether Skip building and linking tether"
                 exit 0
                 ;;
             *)
                 err "Unknown argument: $arg"
-                echo "Usage: ./install.sh [--dry-run] [--brew]"
+                echo "Usage: ./install.sh [--dry-run] [--brew] [--no-tether]"
                 exit 1
                 ;;
         esac
@@ -235,6 +255,8 @@ main() {
     check_dependencies
 
     install_links
+
+    $RUN_TETHER && install_tether
 
     print_summary
 }

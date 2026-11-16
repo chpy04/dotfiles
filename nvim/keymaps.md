@@ -265,6 +265,14 @@ Leader: `Space` | Local leader: `\`
 | `Alt-[` | i | Previous suggestion |
 | `Ctrl-]` | i | Dismiss suggestion |
 
+#### tether (inside Herdr)
+
+| Key | Mode | Description |
+|-----|------|-------------|
+| `<leader>ac` | n, v | Comment on the line / selection to the primary agent |
+| `<leader>aC` | n, v | Comment to a picked agent |
+| `<leader>ad` | n | Open a saved diagram of this repo in a tab |
+
 #### LazyGit
 
 | Key | Mode | Description |

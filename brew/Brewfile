@@ -23,6 +23,10 @@ brew "node"
 brew "python@3.13"
 brew "go"
 
+# tether (tether/): Rust to build it, Graphviz for flowchart layout
+brew "rust"
+brew "graphviz"
+
 # Apps
 cask "nikitabobko/tap/aerospace"
 cask "ghostty"

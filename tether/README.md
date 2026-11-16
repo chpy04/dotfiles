@@ -12,7 +12,8 @@ Acceptance with a real Claude Code: [`docs/E2E.md`](docs/E2E.md).
 
 See [`docs/INSTALL.md`](docs/INSTALL.md): `scripts/install.sh` builds the release binary and links the CLI and
 the Claude Code skill into `~/.local/bin` and `~/.claude/skills`; the Neovim plugin is one lazy.nvim spec
-(`dir = "~/devex/nvim"`). `scripts/install.sh --dry-run` shows what it would do.
+(`dir = "<checkout>/nvim"`). `scripts/install.sh --dry-run` shows what it would do. In the dotfiles repo,
+`./install.sh` at the repo root runs it for you and `nvim/lua/plugins/tether.lua` loads the plugin.
 
 ## Commands
 

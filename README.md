@@ -13,6 +13,7 @@ Vi keys everywhere, tiling windows, terminal-first.
 | AeroSpace | [aerospace/aerospace.toml](aerospace/aerospace.toml) | `~/.aerospace.toml` |
 | Karabiner-Elements | [karabiner/](karabiner) | `~/.config/karabiner` (whole dir) |
 | Homebrew | [brew/Brewfile](brew/Brewfile) | — |
+| tether (Herdr + Neovim + Claude glue, Rust) | [tether/](tether) ([README](tether/README.md)) | `~/.local/bin/tether`, `~/.local/bin/tether-nvim`, `~/.claude/skills/tether` |
 
 ## New machine
 
@@ -35,6 +36,7 @@ Then:
 - **Powerlevel10k**: prompt config is tracked in `zsh/p10k.zsh`; run `p10k configure` to change it.
 - **Neovim**: first launch installs plugins at the versions pinned in `nvim/lazy-lock.json` (lazy.nvim) and LSP servers/formatters (Mason).
 - **AeroSpace / Karabiner**: grant Accessibility / Input Monitoring permissions when macOS asks.
+- **tether**: `./install.sh` builds it (`cargo build --release` in `tether/`) and links the CLI and Claude skill. Rebuild after pulling by re-running `./install.sh`. Tests: `tether/scripts/test-all.sh`.
 
 ## Keys at a glance
 

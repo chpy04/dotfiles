@@ -16,7 +16,7 @@ running inside a Herdr pane. `~/.local/bin` must be on your `PATH`.
 ## 1. CLI, wrapper and skill
 
 ```sh
-cd ~/devex
+cd ~/dotfiles/tether   # or ./install.sh at the dotfiles root, which runs this for you
 scripts/install.sh --dry-run     # show what would happen
 scripts/install.sh               # cargo build --release, then symlink
 ```
@@ -42,7 +42,7 @@ lazy.nvim spec (for the dotfiles setup this is a new file `nvim/lua/plugins/teth
 ```lua
 return {
   {
-    dir = "~/devex/nvim",
+    dir = "~/dotfiles/tether/nvim",
     name = "tether",
     config = function()
       require("tether").setup()
@@ -125,19 +125,17 @@ agent from the first send).
 
 ## 5. Dotfiles integration
 
-`~/dotfiles` uses lazy.nvim with one file per area under `nvim/lua/plugins/`, `~/.local/bin` already on
-`PATH` (`zsh/zshrc`), and `nvim-cmp`, `nvim-autopairs` and `copilot.lua`. To integrate (done by hand; tether's
-installer never touches the dotfiles):
+tether lives inside `~/dotfiles` at `tether/` (added with `git subtree`, so its history is kept).
+The dotfiles wire it up:
 
-1. Add `nvim/lua/plugins/tether.lua` with the spec above, so every machine that checks out the dotfiles
-   and `~/devex` gets the plugin.
-2. Optionally add to `dotfiles/install.sh` a call to `~/devex/scripts/install.sh` (it is safe to repeat),
-   or run it once by hand per machine.
+1. `nvim/lua/plugins/tether.lua` loads the plugin from `../tether/nvim` (resolved through the
+   `~/.config/nvim` symlink) and skips itself if that folder is missing.
+2. `install.sh` runs `tether/scripts/install.sh` after linking configs (skip with `--no-tether`), and
+   `brew/Brewfile` has `rust` and `graphviz`.
 3. The comment box (filetype `tetherinput`) switches off nvim-cmp, blink.cmp and Copilot for itself, and
    re-claims `<CR>` on `InsertEnter`, so autopairs and completion keymaps do not swallow Enter.
-4. Add the `[keys]` remap above if `<leader>ac` is to stay Copilot's prefix.
-5. Optionally list the tether keys in `dotfiles/nvim/keymaps.md` (`<leader>ac`/`<leader>aC`, or your
-   remapped ones).
+4. Copilot's keys live under `<leader>ap`, so `<leader>ac` is free for tether.
+5. The tether keys are listed in `nvim/keymaps.md`.
 
 ## 6. The diagram browser, the viewer and the mouse
 

@@ -22,6 +22,7 @@ This repo is the source of truth for this Mac's dev setup. Live config files are
 | AeroSpace | `aerospace/aerospace.toml` |
 | Karabiner (caps: esc tap / ctrl hold) | `karabiner/` (whole dir linked) |
 | Homebrew | `brew/Brewfile` |
+| tether (our own Rust CLI + Neovim plugin + Claude skill) | `tether/` (see `tether/docs/PLAN.md` before changing it) |
 
 ## Setup notes
 
@@ -30,3 +31,4 @@ This repo is the source of truth for this Mac's dev setup. Live config files are
 - herdr isn't in Homebrew; its binary lives in `~/.local/bin`.
 - Never commit secrets: `~/.ssh`, `~/.config/gh/hosts.yml`, tokens.
 - macOS only.
+- tether builds into `tether/target/` (gitignored). `./install.sh` rebuilds it and links `~/.local/bin/tether`, `tether-nvim` and `~/.claude/skills/tether`. When working on tether from a Claude session inside Herdr, live tests must use sandbox workspaces (`tether/scripts/sandbox.sh`), never the current one.
