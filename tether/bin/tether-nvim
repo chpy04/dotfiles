@@ -1,0 +1,36 @@
+#!/bin/sh
+# tether-nvim: launch Neovim so that tether can find it by pane id (Phase 2 uses this socket
+# for the RPC "jump to file:line"). Inside Herdr it adds
+#     --listen <runtime>/tether/<pane-id with ':' -> '-'>.sock
+# where <runtime> is $XDG_RUNTIME_DIR, else $TMPDIR, else /tmp (trailing '/' stripped).
+# Outside Herdr it is just plain nvim. The nvim command comes from $TETHER_NVIM, else
+# `tether config get nvim.command`, else `nvim`.
+#
+# A leftover socket from a crashed nvim is removed first. If the socket answers (a live nvim in
+# the same pane, e.g. one started from :terminal), it is left alone and this nvim starts without
+# --listen rather than stealing the path.
+
+nvim_cmd="${TETHER_NVIM:-}"
+if [ -z "$nvim_cmd" ] && command -v tether >/dev/null 2>&1; then
+  nvim_cmd="$(tether config get nvim.command 2>/dev/null)"
+fi
+[ -n "$nvim_cmd" ] || nvim_cmd=nvim
+
+set -f # $nvim_cmd is word-split on purpose (it may carry flags) but never glob-expanded
+
+if [ "${HERDR_ENV:-}" = "1" ] && [ -n "${HERDR_PANE_ID:-}" ]; then
+  base="${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}"
+  while [ "${base%/}" != "$base" ]; do base="${base%/}"; done
+  [ -n "$base" ] || base=/
+  dir="$base/tether"
+  sock="$dir/$(printf '%s' "$HERDR_PANE_ID" | tr ':' '-').sock"
+  mkdir -p "$dir" 2>/dev/null
+  if [ -e "$sock" ]; then
+    if $nvim_cmd --server "$sock" --remote-expr 1 >/dev/null 2>&1; then
+      exec $nvim_cmd "$@" # live nvim already owns the socket
+    fi
+    rm -f "$sock"
+  fi
+  exec $nvim_cmd --listen "$sock" "$@"
+fi
+exec $nvim_cmd "$@"

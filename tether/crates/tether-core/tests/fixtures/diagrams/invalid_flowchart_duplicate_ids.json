@@ -1,0 +1,24 @@
+{
+  "type": "flowchart",
+  "title": "T",
+  "nodes": [
+    {
+      "id": "a",
+      "label": "A"
+    },
+    {
+      "id": "b",
+      "label": "B"
+    },
+    {
+      "id": "a",
+      "label": "again"
+    }
+  ],
+  "edges": [
+    {
+      "from": "a",
+      "to": "b"
+    }
+  ]
+}

@@ -1,0 +1,311 @@
+{
+  "$defs": {
+    "Branch": {
+      "additionalProperties": false,
+      "description": "One branch of an `alt` or `par` group.",
+      "properties": {
+        "items": {
+          "description": "Items in this branch (at least one).",
+          "items": {
+            "$ref": "#/$defs/Item"
+          },
+          "minItems": 1,
+          "type": "array"
+        },
+        "label": {
+          "description": "Branch label (the `else` condition); optional.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "items"
+      ],
+      "type": "object"
+    },
+    "CodeRef": {
+      "additionalProperties": false,
+      "description": "A link from a diagram element to source code. Paths are relative to the worktree root.",
+      "properties": {
+        "anchor": {
+          "description": "Optional snippet of the source line, used to re-find the line after the code shifts.",
+          "type": "string"
+        },
+        "end_line": {
+          "description": "Optional 1-based last line of a range; must be >= `line`.",
+          "format": "uint32",
+          "maximum": 10000000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "line": {
+          "description": "1-based line number.",
+          "format": "uint32",
+          "maximum": 10000000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "path": {
+          "description": "File path relative to the worktree root (no leading `/`, no `..`).",
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "line"
+      ],
+      "type": "object"
+    },
+    "Detail": {
+      "additionalProperties": false,
+      "description": "An expandable detail attached to a node, message or note (data model, edge case, ...).",
+      "properties": {
+        "body": {
+          "description": "Body text.",
+          "type": "string"
+        },
+        "title": {
+          "description": "Short heading, e.g. \"Edge case\".",
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "title",
+        "body"
+      ],
+      "type": "object"
+    },
+    "GroupKind": {
+      "description": "Group kind. (alt: Alternatives (use `branches`).; opt: Optional (use `items`).; loop: Loop (use `items`).; par: Parallel (use `branches`, or `items` for a single lane).)",
+      "enum": [
+        "alt",
+        "opt",
+        "loop",
+        "par"
+      ],
+      "type": "string"
+    },
+    "Item": {
+      "description": "One entry of a sequence: a message, a note or a group, tagged by `\"type\"`.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "A message between two participants.",
+          "properties": {
+            "code": {
+              "$ref": "#/$defs/CodeRef",
+              "description": "Linked source code."
+            },
+            "details": {
+              "description": "Expandable details.",
+              "items": {
+                "$ref": "#/$defs/Detail"
+              },
+              "type": "array"
+            },
+            "from": {
+              "description": "Sender participant id.",
+              "type": "string"
+            },
+            "id": {
+              "default": "",
+              "description": "Stable id; assigned as `m1`, `m2`, ... at load time when omitted. Shares one namespace\nwith participant and note ids; letters, digits, `_`, `.` and `-` only.",
+              "pattern": "^[A-Za-z0-9_.-]+$",
+              "type": "string"
+            },
+            "kind": {
+              "$ref": "#/$defs/MessageKind",
+              "description": "Arrow kind, `sync` by default."
+            },
+            "label": {
+              "description": "Arrow label.",
+              "minLength": 1,
+              "type": "string"
+            },
+            "to": {
+              "description": "Receiver participant id.",
+              "type": "string"
+            },
+            "type": {
+              "const": "message",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "from",
+            "to",
+            "label"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A note over one or more participants.",
+          "properties": {
+            "details": {
+              "description": "Expandable details.",
+              "items": {
+                "$ref": "#/$defs/Detail"
+              },
+              "type": "array"
+            },
+            "id": {
+              "default": "",
+              "description": "Stable id; assigned as `n1`, `n2`, ... at load time when omitted. Shares one namespace\nwith participant and message ids; letters, digits, `_`, `.` and `-` only.",
+              "pattern": "^[A-Za-z0-9_.-]+$",
+              "type": "string"
+            },
+            "over": {
+              "description": "Participant ids the note spans (at least one).",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1,
+              "type": "array"
+            },
+            "text": {
+              "description": "Note text.",
+              "minLength": 1,
+              "type": "string"
+            },
+            "type": {
+              "const": "note",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "over",
+            "text"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A group (alt/opt/loop/par) holding nested items.",
+          "properties": {
+            "branches": {
+              "description": "Branches (alt, par). Mutually exclusive with `items`.",
+              "items": {
+                "$ref": "#/$defs/Branch"
+              },
+              "type": "array"
+            },
+            "items": {
+              "description": "Nested items (opt, loop, single-lane par). Mutually exclusive with `branches`.",
+              "items": {
+                "$ref": "#/$defs/Item"
+              },
+              "type": "array"
+            },
+            "kind": {
+              "$ref": "#/$defs/GroupKind",
+              "description": "Group kind."
+            },
+            "label": {
+              "description": "Group label, e.g. the condition.",
+              "minLength": 1,
+              "type": "string"
+            },
+            "type": {
+              "const": "group",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "kind",
+            "label"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "MessageKind": {
+      "description": "Message kind. (sync: Synchronous call (default).; async: Asynchronous call.; return: Return, drawn dashed.)",
+      "enum": [
+        "sync",
+        "async",
+        "return"
+      ],
+      "type": "string"
+    },
+    "Participant": {
+      "additionalProperties": false,
+      "description": "A sequence participant (lifeline).",
+      "properties": {
+        "id": {
+          "description": "Unique id within the diagram, shared with message and note ids: letters, digits, `_`, `.`\nand `-` only.",
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9_.-]+$",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/ParticipantKind",
+          "description": "Kind, controls the icon."
+        },
+        "label": {
+          "description": "Display name.",
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "label"
+      ],
+      "type": "object"
+    },
+    "ParticipantKind": {
+      "description": "Participant kind. (actor: A person.; service: A service or component.; database: A database.; queue: A queue or bus.; external: A third-party system.)",
+      "enum": [
+        "actor",
+        "service",
+        "database",
+        "queue",
+        "external"
+      ],
+      "type": "string"
+    }
+  },
+  "$id": "https://tether.dev/schema/sequence.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "A sequence diagram spec (the `\"type\"` tag lives on [`Diagram`]).",
+  "properties": {
+    "items": {
+      "description": "Ordered messages, notes and groups (at least one).",
+      "items": {
+        "$ref": "#/$defs/Item"
+      },
+      "minItems": 1,
+      "type": "array"
+    },
+    "participants": {
+      "description": "Participants, drawn left to right in this order (at least one).",
+      "items": {
+        "$ref": "#/$defs/Participant"
+      },
+      "minItems": 1,
+      "type": "array"
+    },
+    "title": {
+      "description": "Diagram title.",
+      "minLength": 1,
+      "type": "string"
+    },
+    "type": {
+      "const": "sequence"
+    }
+  },
+  "required": [
+    "type",
+    "title",
+    "participants",
+    "items"
+  ],
+  "title": "Sequence",
+  "type": "object"
+}

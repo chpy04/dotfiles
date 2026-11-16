@@ -1,0 +1,191 @@
+{
+  "$defs": {
+    "CodeRef": {
+      "additionalProperties": false,
+      "description": "A link from a diagram element to source code. Paths are relative to the worktree root.",
+      "properties": {
+        "anchor": {
+          "description": "Optional snippet of the source line, used to re-find the line after the code shifts.",
+          "type": "string"
+        },
+        "end_line": {
+          "description": "Optional 1-based last line of a range; must be >= `line`.",
+          "format": "uint32",
+          "maximum": 10000000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "line": {
+          "description": "1-based line number.",
+          "format": "uint32",
+          "maximum": 10000000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "path": {
+          "description": "File path relative to the worktree root (no leading `/`, no `..`).",
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "line"
+      ],
+      "type": "object"
+    },
+    "Detail": {
+      "additionalProperties": false,
+      "description": "An expandable detail attached to a node, message or note (data model, edge case, ...).",
+      "properties": {
+        "body": {
+          "description": "Body text.",
+          "type": "string"
+        },
+        "title": {
+          "description": "Short heading, e.g. \"Edge case\".",
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "title",
+        "body"
+      ],
+      "type": "object"
+    },
+    "Direction": {
+      "description": "Flowchart layout direction. (TB: Top to bottom (default).; LR: Left to right.)",
+      "enum": [
+        "TB",
+        "LR"
+      ],
+      "type": "string"
+    },
+    "Edge": {
+      "additionalProperties": false,
+      "description": "A directed flowchart edge.",
+      "properties": {
+        "from": {
+          "description": "Source node id.",
+          "type": "string"
+        },
+        "label": {
+          "description": "Optional edge label.",
+          "type": "string"
+        },
+        "style": {
+          "$ref": "#/$defs/EdgeStyle",
+          "description": "Line style, `solid` by default."
+        },
+        "to": {
+          "description": "Target node id.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "from",
+        "to"
+      ],
+      "type": "object"
+    },
+    "EdgeStyle": {
+      "description": "Edge line style. (solid: Solid line (default).; dashed: Dashed line.)",
+      "enum": [
+        "solid",
+        "dashed"
+      ],
+      "type": "string"
+    },
+    "Node": {
+      "additionalProperties": false,
+      "description": "A flowchart node.",
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/CodeRef",
+          "description": "Linked source code."
+        },
+        "details": {
+          "description": "Expandable details.",
+          "items": {
+            "$ref": "#/$defs/Detail"
+          },
+          "type": "array"
+        },
+        "id": {
+          "description": "Unique id within the diagram: letters, digits, `_`, `.` and `-` only.",
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9_.-]+$",
+          "type": "string"
+        },
+        "label": {
+          "description": "Text shown in the node.",
+          "minLength": 1,
+          "type": "string"
+        },
+        "shape": {
+          "$ref": "#/$defs/Shape",
+          "description": "Shape, `process` by default."
+        }
+      },
+      "required": [
+        "id",
+        "label"
+      ],
+      "type": "object"
+    },
+    "Shape": {
+      "description": "Node shape. (process: Rectangle (default).; decision: Diamond.; terminal: Start/end, rounded pill.; io: Input/output parallelogram.; subroutine: Predefined process, double-sided rectangle.; database: Cylinder.)",
+      "enum": [
+        "process",
+        "decision",
+        "terminal",
+        "io",
+        "subroutine",
+        "database"
+      ],
+      "type": "string"
+    }
+  },
+  "$id": "https://tether.dev/schema/flowchart.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "A flowchart spec (the `\"type\"` tag lives on [`Diagram`]).",
+  "properties": {
+    "direction": {
+      "$ref": "#/$defs/Direction",
+      "description": "Layout direction, `TB` by default."
+    },
+    "edges": {
+      "default": [],
+      "description": "Edges between node ids.",
+      "items": {
+        "$ref": "#/$defs/Edge"
+      },
+      "type": "array"
+    },
+    "nodes": {
+      "description": "Nodes (at least one).",
+      "items": {
+        "$ref": "#/$defs/Node"
+      },
+      "minItems": 1,
+      "type": "array"
+    },
+    "title": {
+      "description": "Diagram title; also names the tab and the stored id.",
+      "minLength": 1,
+      "type": "string"
+    },
+    "type": {
+      "const": "flowchart"
+    }
+  },
+  "required": [
+    "type",
+    "title",
+    "nodes"
+  ],
+  "title": "Flowchart",
+  "type": "object"
+}

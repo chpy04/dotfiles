@@ -1,0 +1,26 @@
+sequenceDiagram
+    actor browser as Browser
+    participant api as API
+    participant auth as AuthSvc
+    participant db@{ "type": "database" } as DB
+    browser->>api: POST /login
+    api->>auth: verify(email, pw)
+    auth->>db: SELECT user
+    db-->>auth: user row
+    Note over auth: bcrypt compare, cost 12
+    alt Credentials: valid
+        auth-->>api: session
+        api-->>browser: 200 + cookie
+    else account locked
+        auth-->>api: locked
+        api-->>browser: 423 Locked
+    else invalid
+        api-->>browser: 401 Unauthorized
+    end
+    api-)db: INSERT audit_log
+    opt MFA enabled
+        api->>browser: 302 /mfa
+    end
+    loop until verified
+        browser->>api: POST /mfa
+    end

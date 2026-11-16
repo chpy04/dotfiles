@@ -1,0 +1,14 @@
+ ◈ Session refresh  flowchart · 3 nodes · 2 edges
+
+                  ┏━━━━━━━━━━━━━━━━━━━━━━━┓
+                  ┃ ◆ Token expired? § +1 ┃
+                  ┗━━━━━━━━━━━━━━━━━━━━━━━┛
+                        │yes        │no
+               ╭────────╯           ╰────────╮
+               ▼                             ▼
+  ╭─────────────────────────╮      ╭────────────────────╮
+  │ ▪ Call /token/refresh § │      │ ▪ Continue request │
+  ╰─────────────────────────╯      ╰────────────────────╯
+
+
+ h/l step · j/k branch · ⏎ code · tab details · ␣ac ask

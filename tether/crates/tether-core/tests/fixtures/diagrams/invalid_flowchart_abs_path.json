@@ -1,0 +1,24 @@
+{
+  "type": "flowchart",
+  "title": "T",
+  "nodes": [
+    {
+      "id": "a",
+      "label": "A",
+      "code": {
+        "path": "/etc/passwd",
+        "line": 1
+      }
+    },
+    {
+      "id": "b",
+      "label": "B"
+    }
+  ],
+  "edges": [
+    {
+      "from": "a",
+      "to": "b"
+    }
+  ]
+}
