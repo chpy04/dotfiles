@@ -9,3 +9,4 @@ pub mod send;
 #[doc(hidden)]
 pub mod testing;
 pub mod workspace;
+pub mod layout;
