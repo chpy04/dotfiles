@@ -1,13 +1,19 @@
 //! clap definitions, dispatch and error reporting.
 //!
 //! Exit codes (see `tether_core::error::exit`): 0 ok, 1 failure, 2 bad input/usage,
-//! 3 not inside Herdr, 4 Herdr unavailable, 5 no such target, 6 delivery refused, 7 config error.
+//! 3 not inside Herdr, 4 Herdr unavailable, 5 no such target, 6 refused (delivery, or a layout action
+//! on something tether does not own), 7 config error.
 //! Errors go to stderr as `tether: error: <message>` (+ `tether: hint: ...`); with `--json`
 //! the same error is also printed to stdout as `{"ok":false,"error":{"kind","message"}}`.
 
 mod agents;
+mod code;
 mod config_cmd;
+mod layout;
 mod send;
+mod split;
+mod tab;
+mod view;
 
 use clap::{Parser, Subcommand};
 use tether_core::error::{exit, TetherError};
@@ -28,6 +34,18 @@ enum Command {
     /// Show, locate or create the config file
     #[command(subcommand)]
     Config(config_cmd::ConfigCmd),
+    /// Print this workspace's tabs and panes (commands, agents, Neovims). Run this before changing anything
+    Layout(layout::LayoutArgs),
+    /// Create, rename, focus or close tabs in this workspace
+    #[command(subcommand)]
+    Tab(tab::TabCmd),
+    /// Split a pane right or down and optionally run a command in the new pane
+    Split(split::SplitArgs),
+    /// Open code in Neovim
+    #[command(subcommand)]
+    Code(code::CodeCmd),
+    /// Show a diagram (arrives in Phase 3)
+    View(view::ViewArgs),
 }
 
 /// Whether the user asked for JSON output (decides how errors are reported).
@@ -36,6 +54,11 @@ fn wants_json(cmd: &Command) -> bool {
         Command::Send(a) => a.json,
         Command::Agents(a) => a.json,
         Command::Config(c) => c.wants_json(),
+        Command::Layout(a) => a.json,
+        Command::Tab(c) => c.wants_json(),
+        Command::Split(a) => a.json,
+        Command::Code(c) => c.wants_json(),
+        Command::View(_) => false,
     }
 }
 
@@ -46,6 +69,11 @@ pub fn run() -> i32 {
         Command::Send(a) => send::run(a),
         Command::Agents(a) => agents::run(a),
         Command::Config(c) => config_cmd::run(c),
+        Command::Layout(a) => layout::run(a),
+        Command::Tab(c) => tab::run(c),
+        Command::Split(a) => split::run(a),
+        Command::Code(c) => code::run(c),
+        Command::View(a) => view::run(a),
     };
     match result {
         Ok(()) => exit::OK,

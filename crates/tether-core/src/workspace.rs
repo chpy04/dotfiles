@@ -59,6 +59,20 @@ struct StateFile {
 struct WorkspaceState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     primary_pane: Option<String>,
+    /// Tabs created by `tether tab open` (so `tab close` can refuse hand-made ones).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    tabs: Vec<OwnedTab>,
+}
+
+/// A tab tether created, recorded in the state file under its workspace.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OwnedTab {
+    pub tab_id: String,
+    /// Label at creation time (informational; renames by tether keep it in sync).
+    pub label: String,
+    /// Unix seconds.
+    #[serde(default)]
+    pub created_at: u64,
 }
 
 /// `$TETHER_STATE`, else `<runtime>/tether/state.json`.
@@ -99,8 +113,64 @@ impl StateStore {
     }
 
     pub fn set_primary_pane(&self, workspace_id: &str, pane_id: &str) -> Result<()> {
+        self.update(|st| st.workspaces.entry(workspace_id.to_string()).or_default().primary_pane = Some(pane_id.to_string()))
+    }
+
+    /// Tabs tether created in this workspace.
+    pub fn owned_tabs(&self, workspace_id: &str) -> Vec<OwnedTab> {
+        self.load().workspaces.get(workspace_id).map(|w| w.tabs.clone()).unwrap_or_default()
+    }
+
+    pub fn is_owned_tab(&self, workspace_id: &str, tab_id: &str) -> bool {
+        self.owned_tabs(workspace_id).iter().any(|t| t.tab_id == tab_id)
+    }
+
+    /// Record a tab tether just created (replaces a stale record with the same id).
+    pub fn add_owned_tab(&self, workspace_id: &str, tab_id: &str, label: &str) -> Result<()> {
+        let created_at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        self.update(|st| {
+            let w = st.workspaces.entry(workspace_id.to_string()).or_default();
+            w.tabs.retain(|t| t.tab_id != tab_id);
+            w.tabs.push(OwnedTab { tab_id: tab_id.to_string(), label: label.to_string(), created_at });
+        })
+    }
+
+    pub fn rename_owned_tab(&self, workspace_id: &str, tab_id: &str, label: &str) -> Result<()> {
+        self.update(|st| {
+            if let Some(t) = st.workspaces.entry(workspace_id.to_string()).or_default().tabs.iter_mut().find(|t| t.tab_id == tab_id) {
+                t.label = label.to_string();
+            }
+        })
+    }
+
+    pub fn remove_owned_tab(&self, workspace_id: &str, tab_id: &str) -> Result<()> {
+        self.update(|st| {
+            if let Some(w) = st.workspaces.get_mut(workspace_id) {
+                w.tabs.retain(|t| t.tab_id != tab_id);
+            }
+        })
+    }
+
+    /// Drop records of tabs that no longer exist (`live` = current tab ids of the workspace), so a
+    /// reused tab id can never inherit "tether made this". Writes only when something changed.
+    pub fn prune_owned_tabs(&self, workspace_id: &str, live: &[String]) -> Result<()> {
+        let stale = self.owned_tabs(workspace_id).iter().any(|t| !live.contains(&t.tab_id));
+        if !stale {
+            return Ok(());
+        }
+        self.update(|st| {
+            if let Some(w) = st.workspaces.get_mut(workspace_id) {
+                w.tabs.retain(|t| live.contains(&t.tab_id));
+            }
+        })
+    }
+
+    fn update(&self, f: impl FnOnce(&mut StateFile)) -> Result<()> {
         let mut st = self.load();
-        st.workspaces.entry(workspace_id.to_string()).or_default().primary_pane = Some(pane_id.to_string());
+        f(&mut st);
         if let Some(dir) = self.path.parent() {
             std::fs::create_dir_all(dir)
                 .map_err(|e| TetherError::Other(format!("cannot create {}: {e}", dir.display())))?;

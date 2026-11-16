@@ -16,7 +16,9 @@ pub mod exit {
     pub const HERDR_UNAVAILABLE: i32 = 4;
     /// Target agent/pane not found, ambiguous, or no agent in the workspace.
     pub const NO_TARGET: i32 = 5;
-    /// Herdr refused delivery (`agent_not_ready`, `agent_blocked`, ...). Nothing was sent.
+    /// A refusal, nothing was done: Herdr refused delivery (`agent_not_ready`, `agent_blocked`, ...),
+    /// or tether refused a layout action that would touch something it does not own (foreign tab,
+    /// other workspace).
     pub const REFUSED: i32 = 6;
     /// Config file problem.
     pub const CONFIG: i32 = 7;
@@ -32,6 +34,9 @@ pub enum TetherError {
     Target(String),
     #[error("{0}")]
     Config(String),
+    /// tether declined an unsafe action (closing a tab it did not create, leaving the workspace).
+    #[error("{0}")]
+    Refused(String),
     #[error(transparent)]
     Herdr(#[from] HerdrError),
     #[error("{0}")]
@@ -47,6 +52,7 @@ impl TetherError {
             TetherError::NotInHerdr(_) => exit::NOT_IN_HERDR,
             TetherError::Target(_) => exit::NO_TARGET,
             TetherError::Config(_) => exit::CONFIG,
+            TetherError::Refused(_) => exit::REFUSED,
             TetherError::Other(_) => exit::FAILURE,
             TetherError::Herdr(e) => match e {
                 HerdrError::Connect { .. } | HerdrError::Io(_) | HerdrError::Timeout(_) | HerdrError::Protocol(_) => {
@@ -68,6 +74,7 @@ impl TetherError {
             TetherError::NotInHerdr(_) => "not_in_herdr".into(),
             TetherError::Target(_) => "no_target".into(),
             TetherError::Config(_) => "config".into(),
+            TetherError::Refused(_) => "refused".into(),
             TetherError::Other(_) => "error".into(),
             TetherError::Herdr(HerdrError::Api { code, .. }) => code.clone(),
             TetherError::Herdr(_) => "herdr_unavailable".into(),
