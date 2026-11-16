@@ -29,14 +29,14 @@ tab 3 "session refresh" w8:t5  [tether-made]
 
 - **Tab 1 is the primary agent.** Do not put visuals or code there.
 - **Visuals get a new tab named after their subject** (`session refresh`, not `diagram` or `output`).
-- **Code opens in a split to the right of the visual**, in that same tab.
-- **Never close, rename or rearrange a tab you did not create.** `tether` refuses; do not reach for `--force` unless the user explicitly says to.
+- **Code opens in a split to the right of the visual**, in that same tab. With no `--in`/`--from`, `tether code open` never splits the primary agent's tab: it reuses the Neovim in your most recent tether-made tab, or opens a new tab named after the file (`session.ts`) and starts Neovim there, and says which it did.
+- **Never close, rename or rearrange a tab you did not create.** `tether` refuses (it also refuses to close or rename the tab you are running in); do not reach for `--force` unless the user explicitly says to.
 - **Stay in your own workspace.** Do not pass `--workspace` unless the user asks you to act elsewhere.
 - Do not steal focus. Tabs and splits open in the background; pass `--focus` only when the user should look at it right now.
 
 ## The user's words override the conventions
 
-Explicit placement wins. "Put it next to the chat" means split beside the agent pane in tab 1 (`tether split right --pane <agent pane>` or `tether code open ... --in 1`). "Open it in the tests tab" means `--in tests`. After an override, go back to the defaults for the next request.
+Explicit placement wins. "Put it next to the chat" means split beside the agent pane in tab 1 (`tether split right --pane <agent pane>` or `tether code open ... --in 1`; an explicit `--in` or `--from` is always honored, even for the primary agent's tab). "Open it in the tests tab" means `--in tests`. After an override, go back to the defaults for the next request.
 
 ## Commands
 
@@ -54,7 +54,7 @@ tether code open path:line[-end] [--in <tab>] [--from <pane>] [--focus]
 
 - `tether tab open` prints the tab id and its first pane id. Put long-running commands after `--`.
 - `tether split` splits your own pane unless `--pane` is given. `--ratio` is the share the existing pane keeps.
-- `tether code open src/auth/session.ts:142` resolves paths against the worktree root. It jumps the Neovim already in the target tab (default: your tab; `--in` picks another), and only splits a new one, to the right of `--from` (default your pane), when the tab has none. It never opens a second Neovim in a tab. Output says which pane and whether it was reused. A range (`:142-150`) highlights those lines for a few seconds.
+- `tether code open src/auth/session.ts:142` resolves paths against the worktree root. It jumps the Neovim already in the target tab and only splits a new one, to the right of `--from` (default your pane), when the tab has none. It never opens a second Neovim in a tab. Default target tab (no `--in`, no `--from`): your tab, unless that is the primary agent's tab; then a Neovim in the most recent tether-made tab is reused, else a new tab named after the file is opened (tether-made, no focus stolen). `--in <tab>` or `--from <pane>` picks the tab explicitly and is never redirected. The output line says which pane, whether it was reused or created, and why. A range (`:142-150`) highlights those lines for a few seconds.
 - Refusals exit with code 6 and say why; read the message instead of retrying with `--force`.
 
 Typical flows:
@@ -76,4 +76,113 @@ The user understands things by reading code, with go-to-definition and reference
 
 ## Diagrams
 
-(Placeholder, arrives with Phase 3.) `tether diagram create` will validate a spec and `tether view` will show it in a tab named after its subject, following the conventions above. Until then, do not try to draw diagrams in tabs; explain in text and point at code.
+Make a diagram when the user wants to *understand how something works* and the answer is a shape (a branching decision flow, a conversation between components). Write a small JSON spec, hand it to `tether diagram create`, and a tab named after the diagram opens with an interactive viewer. The user moves through it with hjkl, presses Enter on a node to open its linked code in Neovim, and comments on any node straight to you. A diagram is a map into the code, not a picture, so **every node or message that corresponds to code gets a `code` ref**.
+
+### Which type
+
+- **flowchart**: control flow and decisions inside one piece of logic: "what happens when the token expires", a retry policy, a state machine, a request pipeline with branches. Nodes are steps, edges are transitions, `decision` nodes branch (label the edges `yes`/`no`).
+- **sequence**: who talks to whom, in what order, across components or services: a login request through API, auth service and database; a webhook handshake; a cache fill. Use `participants`, ordered `messages`, `note`s, and `alt` / `opt` / `loop` / `par` groups for branches and repeats.
+- If you are unsure: one function or module's internal logic is a flowchart; several actors exchanging messages is a sequence diagram. Prefer two small diagrams over one with 40 nodes (about 30 nodes is the comfortable maximum for a flowchart).
+- Not a diagram: a list of files (use `tether code open` for each), a plain explanation, anything without structure.
+
+### Always link the code, with an anchor
+
+Every node, message or note that maps to code gets `"code": {"path", "line", "anchor"}`. `path` is relative to the worktree root, `line` is 1-based (optional `end_line` for a range). **Always add `anchor`**: a short, distinctive snippet copied from that line (`"token.expiresAt <"`, `"router.post('/login'"`). The viewer re-finds the line by its anchor when the code shifts, and marks the link *stale* (and refuses to jump to a wrong line) when the snippet is gone. Read the file first so that line numbers and anchors are real; never guess them. Only leave `code` out for elements that really have no code (an external system, "user clicks submit").
+
+### Put the detail in `details`
+
+Keep labels short (a few words). Everything else goes into `details`: `[{"title": "Edge case", "body": "..."}]`. Good titles: `Edge case`, `Data model`, `Invariant`, `Failure mode`, `Perf`, `Why`. The viewer shows a collapsed `+N` badge; the user expands it with Tab, and the layout makes room. A linked element with `details` also shows its `CODE` ref in the panel. Edge cases, data shapes, side paths and caveats belong here, not in extra nodes.
+
+### Schemas
+
+JSON Schemas are published in the repo: `schema/flowchart.schema.json` and `schema/sequence.schema.json`. Every spec is validated against them plus semantic checks (unknown ids, duplicate ids, `end_line` before `line`, absolute or `..` paths). An invalid spec exits with code 2 and prints one `- /json/pointer: what is wrong` line per problem; fix those and run again. Unknown fields are rejected, so do not invent keys.
+
+### Flowchart example
+
+```json
+{
+  "type": "flowchart",
+  "title": "Session refresh",
+  "direction": "TB",
+  "nodes": [
+    { "id": "check", "label": "Token expired?", "shape": "decision",
+      "code": { "path": "src/auth/session.ts", "line": 142, "anchor": "token.expiresAt <" },
+      "details": [{ "title": "Edge case", "body": "Uses client clock; skew > 30s causes early refresh" }] },
+    { "id": "refresh", "label": "Call /token/refresh", "shape": "io",
+      "code": { "path": "src/auth/refresh.ts", "line": 18, "anchor": "export async function refresh" } },
+    { "id": "ok", "label": "Continue request", "shape": "terminal" }
+  ],
+  "edges": [
+    { "from": "check", "to": "refresh", "label": "yes" },
+    { "from": "check", "to": "ok", "label": "no" },
+    { "from": "refresh", "to": "ok", "style": "dashed" }
+  ]
+}
+```
+
+`shape`: `process` (default), `decision`, `terminal` (start/end), `io`, `subroutine`, `database`. `direction`: `TB` (default) or `LR`. `style`: `solid` (default) or `dashed` (use for async, optional or fallback paths). Edge `label` is optional but use it on every branch out of a decision. Node `id`s are yours: short, stable, unique.
+
+### Sequence example
+
+```json
+{
+  "type": "sequence",
+  "title": "Login request",
+  "participants": [
+    { "id": "browser", "label": "Browser", "kind": "actor" },
+    { "id": "api", "label": "API", "kind": "service" },
+    { "id": "db", "label": "DB", "kind": "database" }
+  ],
+  "items": [
+    { "type": "message", "from": "browser", "to": "api", "label": "POST /login",
+      "code": { "path": "src/api/login.ts", "line": 14, "anchor": "router.post('/login'" } },
+    { "type": "message", "from": "api", "to": "db", "label": "SELECT user",
+      "code": { "path": "src/auth/user_repo.ts", "line": 56, "anchor": "SELECT * FROM users" },
+      "details": [{ "title": "Data model", "body": "User { id, email, pw_hash, mfa }" }] },
+    { "type": "message", "from": "db", "to": "api", "label": "user row", "kind": "return" },
+    { "type": "note", "over": ["api"], "text": "bcrypt compare, cost 12" },
+    { "type": "group", "kind": "alt", "label": "Credentials",
+      "branches": [
+        { "label": "valid", "items": [
+          { "type": "message", "from": "api", "to": "browser", "label": "200 + cookie", "kind": "return" } ] },
+        { "label": "invalid", "items": [
+          { "type": "message", "from": "api", "to": "browser", "label": "401", "kind": "return" } ] }
+      ] },
+    { "type": "group", "kind": "opt", "label": "MFA enabled", "items": [
+      { "type": "message", "from": "api", "to": "browser", "label": "302 /mfa" } ] }
+  ]
+}
+```
+
+`participants[].kind`: `actor`, `service`, `database`, `queue`, `external` (controls the icon and color). Message `kind`: `sync` (default), `async`, `return` (drawn dashed). `items` are in time order and are `message`, `note` (`over` lists one or more participant ids) or `group`. `alt` and `par` groups take `branches` (each with an optional `label` and `items`); `opt` and `loop` take `items`. Messages and notes get ids `m1`, `m2`, ... and `n1`, ... in document order unless you give an `id` (give one to anything you may want to refer to later).
+
+### Commands
+
+```
+tether diagram create spec.json [--open tab|split|here|none] [--pane <id>] [--focus] [--json]
+tether diagram create - < spec.json            # spec on stdin
+tether diagram list [--json]                   # diagrams stored in this worktree
+tether diagram show <id>                       # the stored spec as JSON
+tether diagram update <id> spec.json           # replace the spec (validated), same id
+tether diagram export <id> --mermaid           # Mermaid source on stdout
+tether diagram delete <id>
+tether view <id> [--placement tab|split|here]  # (re)open the viewer
+```
+
+- `create` validates, stores the spec in `.tether/diagrams/<id>.json` in the worktree (gitignored) and prints the id. By default (`--open tab`, or the user's `[placement] diagram` config) it opens a **new tab named after the title** running the viewer, in the background; the tab is tether-made, so you may close or rename it later. The viewer pane closes when the user presses `q`.
+- `--open split` puts the viewer in a split to the right of your pane (or `--pane <id>`): use it when the user says "next to the chat". `--open none` only stores it. `--open here` runs the viewer in your own pane: never do this from the primary agent's pane.
+- Run `tether layout` first, like for any tab. Do not pass `--focus` unless the user should look right now.
+- To revise a diagram the user is looking at, `tether diagram update <id> spec.json`, then tell them to reopen it (`tether view <id> --placement tab`); the open viewer shows the version it started with.
+- If you only need the user to see an element, say its label and let them use the viewer; do not paste the spec back to them.
+
+### What the user does in the viewer (so you can answer their comments)
+
+`j`/`k` follow edges or move between messages, `h`/`l` switch branch or participant, Enter opens the linked code in the Neovim split to the right of the viewer (the same Neovim every time), Tab expands `details`, `/` searches, Space-a-c comments on the focused node to you. A comment from a node arrives as:
+
+```
+[comment] diagram "Session refresh" › node "Token expired?"  src/auth/session.ts:142  (worktree: feat-login)
+  142 │ if (token.expiresAt < Date.now()) {
+Why client clock instead of server time here?
+```
+
+It names the diagram, the element, the live code ref and the line. Answer about that element; open related code with `tether code open`. A `[stale link]` marker after the ref means the anchor no longer matches: the code moved or changed since you drew the diagram, so re-read it, answer from the current code and offer to `tether diagram update` the spec.

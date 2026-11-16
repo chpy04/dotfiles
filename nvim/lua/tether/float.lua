@@ -61,7 +61,16 @@ function M.open(opts)
   vim.bo[buf].bufhidden = "wipe"
   vim.bo[buf].swapfile = false
   vim.bo[buf].filetype = "tetherinput"
-  vim.b[buf].completion = false -- blink.cmp: no completion popups in the comment box
+  -- no completion / AI suggestions in the comment box (set after the filetype, so FileType
+  -- autocommands of completion plugins cannot undo it)
+  vim.b[buf].completion = false -- blink.cmp
+  vim.b[buf].copilot_enabled = false -- copilot.vim / copilot.lua
+  vim.b[buf].copilot_suggestion_auto_trigger = false
+  vim.b[buf].copilot_suggestion_hidden = true
+  local has_cmp, cmp = pcall(require, "cmp")
+  if has_cmp and type(cmp) == "table" and cmp.setup and cmp.setup.buffer then
+    pcall(cmp.setup.buffer, { enabled = false })
+  end
 
   local win = api.nvim_open_win(buf, true, {
     relative = "cursor",
@@ -154,15 +163,32 @@ function M.open(opts)
     api.nvim_feedkeys(api.nvim_replace_termcodes("<CR>", true, false, true), "ni", false)
   end
 
-  local function map(modes, lhs, fn)
-    vim.keymap.set(modes, lhs, fn, { buffer = buf, nowait = true, silent = true })
+  local function install_maps()
+    if closed or not api.nvim_buf_is_valid(buf) then
+      return
+    end
+    local function map(modes, lhs, fn)
+      vim.keymap.set(modes, lhs, fn, { buffer = buf, nowait = true, silent = true })
+    end
+    map({ "i", "n" }, "<CR>", submit)
+    map({ "i", "n" }, "<Esc>", cancel)
+    map({ "i", "n" }, "<C-c>", cancel)
+    map("i", "<S-CR>", newline)
+    map("i", "<C-j>", newline) -- fallback where the terminal does not distinguish S-CR
+    map("n", "q", cancel)
   end
-  map({ "i", "n" }, "<CR>", submit)
-  map({ "i", "n" }, "<Esc>", cancel)
-  map({ "i", "n" }, "<C-c>", cancel)
-  map("i", "<S-CR>", newline)
-  map("i", "<C-j>", newline) -- fallback where the terminal does not distinguish S-CR
-  map("n", "q", cancel)
+  install_maps()
+  -- Plugins (autopairs, completion, ...) may map <CR> in insert mode when InsertEnter fires,
+  -- including buffer-locally. Buffer-local + nowait already beats global maps; re-installing on
+  -- InsertEnter (now and once the other handlers ran) also beats buffer-local ones.
+  api.nvim_create_autocmd("InsertEnter", {
+    group = group,
+    buffer = buf,
+    callback = function()
+      install_maps()
+      vim.schedule(install_maps)
+    end,
+  })
 
   -- grow with content (wrapped lines count), up to max_height
   local function resize()
@@ -184,6 +210,7 @@ function M.open(opts)
   })
 
   vim.cmd("startinsert")
+  vim.schedule(install_maps)
 
   handle.win = win
   handle.buf = buf

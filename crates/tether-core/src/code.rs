@@ -8,12 +8,12 @@ use serde::Serialize;
 
 use crate::config::Placement;
 use crate::error::{Result, TetherError};
-use crate::herdr::{Client, Pane, PaneSplit};
+use crate::herdr::{Client, Pane, PaneSplit, Tab};
 use crate::nvim;
 use crate::panes::{self, Scope};
 use crate::send::{self, CodeRef};
 use crate::tabs;
-use crate::workspace::StateStore;
+use crate::workspace::{self, StateStore};
 
 /// What `code open` needs from Neovim, so the decision logic is testable without one.
 pub trait Editor {
@@ -141,15 +141,22 @@ pub struct CodeOpened {
     pub end_line: Option<u32>,
     /// `path:line` as Neovim reports it after the jump.
     pub at: String,
-    /// The pane that was split (only when not reused).
+    /// The pane that was split (only when not reused and no tab was created).
     pub split_from: Option<String>,
+    /// A new tab was created for this Neovim (default placement away from the primary agent's tab).
+    pub tab_created: bool,
+    /// Label of that new tab.
+    pub tab_label: Option<String>,
+    /// What was done and why, in one line (printed by the CLI).
+    pub summary: String,
     pub warnings: Vec<String>,
 }
 
 pub struct CodeOpen<'a> {
     pub reference: &'a CodeRef,
     pub file: PathBuf,
-    /// `--in`: tab index, id or label. Default: the `--from` pane's tab, else the current tab.
+    /// `--in`: tab index, id or label. Default: the `--from` pane's tab, else the current tab; when
+    /// that is the primary agent's tab (implicit only), a tether tab with a Neovim, else a new tab.
     pub in_tab: Option<&'a str>,
     pub from: Option<&'a str>,
     pub focus: bool,
@@ -158,9 +165,40 @@ pub struct CodeOpen<'a> {
     pub placement: &'a Placement,
 }
 
+/// The tab holding the primary agent (read-only lookup; `None` when there is none or Herdr cannot say).
+fn primary_agent_tab(client: &Client, store: &StateStore, workspace_id: &str) -> Option<String> {
+    let rows = workspace::list_agents_in(client, workspace_id, store, false).ok()?;
+    rows.into_iter().find(|r| r.is_primary).map(|r| r.tab_id)
+}
+
+/// Neovim panes in the most recently created tether tab (newest first) that has a live one.
+fn recent_tether_nvim(
+    owned: &[workspace::OwnedTab],
+    exclude_tab: &str,
+    live_tabs: &[crate::herdr::Tab],
+    all_panes: &[Pane],
+    alive: &dyn Fn(&str) -> bool,
+) -> Option<(crate::herdr::Tab, String)> {
+    let mut order: Vec<&workspace::OwnedTab> = owned.iter().collect();
+    // newest first; equal timestamps: the one recorded later wins
+    order.reverse();
+    order.sort_by_key(|t| std::cmp::Reverse(t.created_at));
+    for t in order {
+        if t.tab_id == exclude_tab {
+            continue;
+        }
+        let Some(tab) = live_tabs.iter().find(|x| x.tab_id == t.tab_id) else { continue };
+        if let Some(p) = all_panes.iter().find(|p| p.tab_id == tab.tab_id && alive(&p.pane_id)) {
+            return Some((tab.clone(), p.pane_id.clone()));
+        }
+    }
+    None
+}
+
 pub fn open(client: &Client, store: &StateStore, scope: &Scope, editor: &dyn Editor, o: &CodeOpen) -> Result<CodeOpened> {
+    let implicit = o.in_tab.is_none() && o.from.is_none();
     // 1. which tab
-    let tab = match (o.in_tab, o.from) {
+    let mut tab = match (o.in_tab, o.from) {
         (Some(spec), _) => tabs::resolve_scoped(client, scope, store, spec)?,
         (None, Some(from)) => {
             let p = panes::pane_in_scope(client, scope, from)?;
@@ -175,47 +213,98 @@ pub fn open(client: &Client, store: &StateStore, scope: &Scope, editor: &dyn Edi
             }
         },
     };
-    let tab_panes: Vec<Pane> = client.pane_list(Some(&scope.workspace_id))?.into_iter().filter(|p| p.tab_id == tab.tab_id).collect();
-
-    // 2. reuse or split
-    let decision = decide(&tab_panes, &|id| editor.probe(id).is_some(), o.from, scope.pane_id.as_deref())?;
-    let r = o.reference;
+    let all_panes: Vec<Pane> = client.pane_list(Some(&scope.workspace_id))?;
+    let panes_of = |tab_id: &str| -> Vec<Pane> { all_panes.iter().filter(|p| p.tab_id == tab_id).cloned().collect() };
+    let mut tab_panes = panes_of(&tab.tab_id);
     let mut warnings = Vec::new();
-    let (pane_id, reused, split_from) = match decision {
-        Decision::Reuse { pane_id } => (pane_id, true, None),
-        Decision::Split { from } => {
-            // a Neovim that tether did not start cannot be driven: say so rather than hide it
-            for p in &tab_panes {
-                if let Ok(info) = client.pane_process_info(&p.pane_id) {
-                    if info.foreground_processes.iter().any(|f| f.name == "nvim") {
-                        warnings.push(format!(
-                            "pane {} runs a Neovim without a tether socket (not started via tether-nvim); opened a new one",
-                            p.pane_id
-                        ));
-                    }
-                }
-            }
+    let mut summary = String::new();
+    let mut new_tab: Option<(String, String)> = None; // (label, root pane)
+    let mut reuse_pane: Option<String> = None;
+
+    // 1b. default placement: never split the primary agent's tab on an implicit target. Reuse the
+    // Neovim in the most recently tether-made tab, else open a tab named after the file.
+    if implicit
+        && !tab_panes.iter().any(|p| editor.probe(&p.pane_id).is_some())
+        && primary_agent_tab(client, store, &scope.workspace_id).as_deref() == Some(tab.tab_id.as_str())
+    {
+        let live_tabs = tabs::scoped_tabs(client, scope, store)?;
+        let owned = store.owned_tabs(&scope.workspace_id);
+        if let Some((t, pane)) =
+            recent_tether_nvim(&owned, &tab.tab_id, &live_tabs, &all_panes, &|id| editor.probe(id).is_some())
+        {
+            summary = format!(
+                "tab {} \"{}\" is the primary agent's tab, so it was not split; reused the Neovim in tether tab {} \"{}\"",
+                tab.number, tab.label, t.number, t.label
+            );
+            tab_panes = panes_of(&t.tab_id);
+            tab = t;
+            reuse_pane = Some(pane);
+        } else {
+            let name = o.file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "code".into());
             let cwd = send::git_toplevel(&o.file)
                 .or_else(|| o.file.parent().map(Path::to_path_buf))
                 .map(|p| p.to_string_lossy().into_owned());
-            let direction = panes::parse_direction(&o.placement.code_direction)?;
-            let ratio = panes::check_ratio(o.placement.code_ratio)?;
-            let new = client.pane_split(&PaneSplit {
-                target_pane_id: &from,
-                direction,
-                ratio: Some(ratio),
-                cwd: cwd.as_deref(),
-                focus: false,
-            })?;
-            let args = vec![o.wrapper.clone(), format!("+{}", r.line), o.file.to_string_lossy().into_owned()];
-            panes::run_in_pane(client, &new.pane_id, &args)?;
-            if !editor.wait_ready(&new.pane_id, o.ready_timeout) {
-                return Err(TetherError::Other(format!(
-                    "Neovim in new pane {} did not answer within {:?}; the pane was left open (is `{}` runnable there?)",
-                    new.pane_id, o.ready_timeout, o.wrapper
-                )));
+            let args = vec![o.wrapper.clone(), format!("+{}", o.reference.line), o.file.to_string_lossy().into_owned()];
+            let opened = tabs::open_tab(client, store, scope, &name, cwd.as_deref(), false, &args)?;
+            summary = format!(
+                "tab {} \"{}\" is the primary agent's tab, so it was not split; opened new tab {} \"{}\" for Neovim",
+                tab.number, tab.label, opened.index, opened.label
+            );
+            new_tab = Some((opened.label.clone(), opened.pane_id.clone()));
+            tab = Tab { tab_id: opened.tab_id, number: opened.index, label: opened.label, ..tab };
+            tab_panes = vec![Pane { pane_id: opened.pane_id.clone(), tab_id: tab.tab_id.clone(), ..Default::default() }];
+        }
+    }
+
+    // 2. reuse or split (or: Neovim was just started in the new tab's root pane)
+    let r = o.reference;
+    let (pane_id, reused, split_from) = if let Some((_, root)) = new_tab.clone() {
+        if !editor.wait_ready(&root, o.ready_timeout) {
+            return Err(TetherError::Other(format!(
+                "Neovim in new tab pane {root} did not answer within {:?}; the tab was left open (is `{}` runnable there?)",
+                o.ready_timeout, o.wrapper
+            )));
+        }
+        (root, false, None)
+    } else if let Some(p) = reuse_pane {
+        (p, true, None)
+    } else {
+        match decide(&tab_panes, &|id| editor.probe(id).is_some(), o.from, scope.pane_id.as_deref())? {
+            Decision::Reuse { pane_id } => (pane_id, true, None),
+            Decision::Split { from } => {
+                // a Neovim that tether did not start cannot be driven: say so rather than hide it
+                for p in &tab_panes {
+                    if let Ok(info) = client.pane_process_info(&p.pane_id) {
+                        if info.foreground_processes.iter().any(|f| f.name == "nvim") {
+                            warnings.push(format!(
+                                "pane {} runs a Neovim without a tether socket (not started via tether-nvim); opened a new one",
+                                p.pane_id
+                            ));
+                        }
+                    }
+                }
+                let cwd = send::git_toplevel(&o.file)
+                    .or_else(|| o.file.parent().map(Path::to_path_buf))
+                    .map(|p| p.to_string_lossy().into_owned());
+                let direction = panes::parse_direction(&o.placement.code_direction)?;
+                let ratio = panes::check_ratio(o.placement.code_ratio)?;
+                let new = client.pane_split(&PaneSplit {
+                    target_pane_id: &from,
+                    direction,
+                    ratio: Some(ratio),
+                    cwd: cwd.as_deref(),
+                    focus: false,
+                })?;
+                let args = vec![o.wrapper.clone(), format!("+{}", r.line), o.file.to_string_lossy().into_owned()];
+                panes::run_in_pane(client, &new.pane_id, &args)?;
+                if !editor.wait_ready(&new.pane_id, o.ready_timeout) {
+                    return Err(TetherError::Other(format!(
+                        "Neovim in new pane {} did not answer within {:?}; the pane was left open (is `{}` runnable there?)",
+                        new.pane_id, o.ready_timeout, o.wrapper
+                    )));
+                }
+                (new.pane_id, false, Some(from))
             }
-            (new.pane_id, false, Some(from))
         }
     };
 
@@ -223,6 +312,13 @@ pub fn open(client: &Client, store: &StateStore, scope: &Scope, editor: &dyn Edi
     let at = editor.jump(&pane_id, &o.file, r.line, r.end_line)?;
     if o.focus {
         client.pane_focus(&pane_id)?;
+    }
+    if summary.is_empty() {
+        summary = match (&split_from, reused) {
+            (_, true) => format!("reused the Neovim in pane {pane_id} (tab {} \"{}\")", tab.number, tab.label),
+            (Some(f), false) => format!("no Neovim in tab {} \"{}\"; split pane {f} and started one", tab.number, tab.label),
+            (None, false) => format!("started Neovim in pane {pane_id}"),
+        };
     }
     Ok(CodeOpened {
         pane_id,
@@ -233,6 +329,9 @@ pub fn open(client: &Client, store: &StateStore, scope: &Scope, editor: &dyn Edi
         end_line: r.end_line,
         at,
         split_from,
+        tab_created: new_tab.is_some(),
+        tab_label: new_tab.map(|(l, _)| l),
+        summary,
         warnings,
     })
 }
@@ -291,7 +390,17 @@ mod tests {
     }
 
     fn fake() -> FakeHerdr {
-        FakeHerdr::start(|method, params| match method {
+        fake_ex(false)
+    }
+
+    /// `primary`: the agent list shows a Claude in tab w1:t1 (the caller's own tab).
+    fn fake_ex(primary: bool) -> FakeHerdr {
+        FakeHerdr::start(move |method, params| match method {
+            "agent.list" if primary => Ok(json!({"type":"agent_list","agents":[
+                {"pane_id":"w1:p1","workspace_id":"w1","tab_id":"w1:t1","agent":"claude","agent_status":"idle"}]})),
+            "tab.create" => Ok(json!({"type":"tab_created",
+                "tab":{"tab_id":"w1:t9","workspace_id":"w1","number":3,"label":params["label"]},
+                "root_pane":{"pane_id":"w1:p20","workspace_id":"w1","tab_id":"w1:t9"}})),
             "tab.list" => Ok(json!({"type":"tab_list","tabs":[
                 {"tab_id":"w1:t1","workspace_id":"w1","number":1,"label":"1"},
                 {"tab_id":"w1:t4","workspace_id":"w1","number":2,"label":"diagram"}]})),
@@ -299,7 +408,10 @@ mod tests {
                 {"pane_id":"w1:p1","workspace_id":"w1","tab_id":"w1:t1","focused":true},
                 {"pane_id":"w1:p5","workspace_id":"w1","tab_id":"w1:t4","focused":false},
                 {"pane_id":"w1:p6","workspace_id":"w1","tab_id":"w1:t4","focused":false}]})),
-            "pane.get" => Ok(json!({"type":"pane_info","pane":{"pane_id":params["pane_id"],"workspace_id":"w1","tab_id":"w1:t4"}})),
+            "pane.get" => {
+                let tab = if params["pane_id"] == "w1:p1" { "w1:t1" } else { "w1:t4" };
+                Ok(json!({"type":"pane_info","pane":{"pane_id":params["pane_id"],"workspace_id":"w1","tab_id":tab}}))
+            }
             "pane.split" => Ok(json!({"type":"pane_info","pane":{"pane_id":"w1:p9","workspace_id":"w1","tab_id":"w1:t4"}})),
             "pane.process_info" => Ok(json!({"type":"pane_process_info","process_info":{"pane_id":params["pane_id"],"foreground_processes":[{"pid":1,"name":"zsh","argv":["zsh"]}]}})),
             "pane.send_input" | "pane.focus" => Ok(json!({"type":"ok"})),
@@ -312,19 +424,118 @@ mod tests {
     }
 
     fn run(f: &FakeHerdr, ed: &MockEditor, in_tab: Option<&str>, from: Option<&str>, r: &str) -> Result<CodeOpened> {
+        run_seeded(f, ed, in_tab, from, r, &[]).0
+    }
+
+    /// `seed`: (tab id, label, created_at) tether-made tabs recorded before the call. Also returns
+    /// the tether-made tab ids recorded afterwards.
+    fn run_seeded(
+        f: &FakeHerdr,
+        ed: &MockEditor,
+        in_tab: Option<&str>,
+        from: Option<&str>,
+        r: &str,
+        seed: &[(&str, &str, u64)],
+    ) -> (Result<CodeOpened>, Vec<String>) {
         let d = tempfile::tempdir().unwrap();
         let file = d.path().join("a.ts");
         std::fs::write(&file, "x\n").unwrap();
         let store = StateStore::new(d.path().join("state.json"));
+        for (id, label, at) in seed {
+            store.add_owned_tab_at("w1", id, label, *at).unwrap();
+        }
         let reference: CodeRef = r.parse().unwrap();
         let placement = Placement { diagram: "tab".into(), code_direction: "right".into(), code_ratio: 0.4 };
-        open(
+        let res = open(
             &Client::new(f.path()),
             &store,
             &scope(),
             ed,
             &CodeOpen { reference: &reference, file, in_tab, from, focus: false, ready_timeout: Duration::from_millis(50), wrapper: "/repo/bin/tether-nvim".into(), placement: &placement },
-        )
+        );
+        let owned = store.owned_tabs("w1").into_iter().map(|t| t.tab_id).collect();
+        (res, owned)
+    }
+
+    // ---- finding 7: the primary agent's tab is not split by default ----
+
+    #[test]
+    fn primary_tab_default_opens_a_new_tab_named_after_the_file() {
+        let f = fake_ex(true);
+        let ed = MockEditor { ready_after_split: true, ..Default::default() };
+        let (r, owned) = run_seeded(&f, &ed, None, None, "a.ts:7", &[]);
+        let r = r.unwrap();
+        assert!(f.requests_for("pane.split").is_empty(), "the chat tab is not split");
+        let create = &f.requests_for("tab.create")[0].params;
+        assert_eq!((create["label"].as_str(), create["focus"].as_bool()), (Some("a.ts"), Some(false)));
+        assert!(r.tab_created && !r.reused);
+        assert_eq!((r.tab_id.as_str(), r.pane_id.as_str(), r.tab_label.as_deref()), ("w1:t9", "w1:p20", Some("a.ts")));
+        assert_eq!(owned, ["w1:t9"], "the new tab is recorded as tether-made");
+        let text = f.requests_for("pane.send_input")[0].params["text"].as_str().unwrap().to_string();
+        assert!(text.starts_with("/repo/bin/tether-nvim +7 ") && text.ends_with("a.ts"), "{text}");
+        assert_eq!(ed.jumps.borrow()[0].0, "w1:p20");
+        assert!(r.summary.contains("primary agent's tab") && r.summary.contains("new tab 3 \"a.ts\""), "{}", r.summary);
+    }
+
+    #[test]
+    fn primary_tab_default_reuses_neovim_in_the_most_recent_tether_tab() {
+        let f = fake_ex(true);
+        let ed = MockEditor { alive: ["w1:p5".to_string()].into(), ready_after_split: true, ..Default::default() };
+        let (r, _) = run_seeded(&f, &ed, None, None, "a.ts:7", &[("w1:t4", "diagram", 100)]);
+        let r = r.unwrap();
+        assert!(r.reused && !r.tab_created);
+        assert_eq!((r.pane_id.as_str(), r.tab_id.as_str()), ("w1:p5", "w1:t4"));
+        assert!(f.requests_for("tab.create").is_empty() && f.requests_for("pane.split").is_empty());
+        assert!(r.summary.contains("reused the Neovim in tether tab 2"), "{}", r.summary);
+        // a tether tab without a Neovim does not count: new tab
+        let f = fake_ex(true);
+        let ed = MockEditor { ready_after_split: true, ..Default::default() };
+        let (r, _) = run_seeded(&f, &ed, None, None, "a.ts:7", &[("w1:t4", "diagram", 100)]);
+        assert!(r.unwrap().tab_created);
+    }
+
+    #[test]
+    fn explicit_in_or_from_still_splits_next_to_the_chat() {
+        for (in_tab, from) in [(Some("1"), None), (None, Some("w1:p1"))] {
+            let f = fake_ex(true);
+            let ed = MockEditor { ready_after_split: true, ..Default::default() };
+            let r = run(&f, &ed, in_tab, from, "a.ts:7").unwrap();
+            assert!(!r.tab_created && !r.reused, "{in_tab:?} {from:?}");
+            assert_eq!(f.requests_for("pane.split")[0].params["target_pane_id"], "w1:p1");
+            assert!(f.requests_for("tab.create").is_empty());
+        }
+    }
+
+    #[test]
+    fn a_live_neovim_in_the_primary_tab_is_reused_in_place() {
+        let f = fake_ex(true);
+        let ed = MockEditor { alive: ["w1:p1".to_string()].into(), ..Default::default() };
+        let r = run(&f, &ed, None, None, "a.ts:7").unwrap();
+        assert!(r.reused && r.pane_id == "w1:p1" && !r.tab_created);
+        assert!(f.requests_for("tab.create").is_empty() && f.requests_for("pane.split").is_empty());
+    }
+
+    #[test]
+    fn non_primary_current_tab_still_splits_by_default() {
+        // the primary lives in w1:t4; the caller is in w1:t1
+        let f = FakeHerdr::start(|method, params| match method {
+            "agent.list" => Ok(json!({"type":"agent_list","agents":[
+                {"pane_id":"w1:p5","workspace_id":"w1","tab_id":"w1:t4","agent":"claude","agent_status":"idle"}]})),
+            "tab.list" => Ok(json!({"type":"tab_list","tabs":[
+                {"tab_id":"w1:t1","workspace_id":"w1","number":1,"label":"1"},
+                {"tab_id":"w1:t4","workspace_id":"w1","number":2,"label":"chat"}]})),
+            "pane.list" => Ok(json!({"type":"pane_list","panes":[
+                {"pane_id":"w1:p1","workspace_id":"w1","tab_id":"w1:t1","focused":true},
+                {"pane_id":"w1:p5","workspace_id":"w1","tab_id":"w1:t4"}]})),
+            "pane.split" => Ok(json!({"type":"pane_info","pane":{"pane_id":"w1:p9","workspace_id":"w1","tab_id":"w1:t1"}})),
+            "pane.process_info" => Ok(json!({"type":"pane_process_info","process_info":{"pane_id":params["pane_id"],"foreground_processes":[]}})),
+            "pane.send_input" | "pane.focus" => Ok(json!({"type":"ok"})),
+            _ => Err(("invalid_request".into(), method.to_string())),
+        });
+        let ed = MockEditor { ready_after_split: true, ..Default::default() };
+        let r = run(&f, &ed, None, None, "a.ts:7").unwrap();
+        assert!(!r.tab_created);
+        assert_eq!(f.requests_for("pane.split")[0].params["target_pane_id"], "w1:p1");
     }
 
     #[test]

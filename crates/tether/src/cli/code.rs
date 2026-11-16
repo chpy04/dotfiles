@@ -22,7 +22,9 @@ pub struct OpenArgs {
     /// `path:line` or `path:line-endLine` (relative paths resolve against the worktree root)
     #[arg(value_name = "PATH:LINE[-END]")]
     pub reference: String,
-    /// Tab to open it in: index, id or label (default: the current tab)
+    /// Tab to open it in: index, id or label. Default: the current tab, except that the primary
+    /// agent's tab is never split: a tether tab with a Neovim is reused, else a new tab named after the file
+    /// is opened (pass --in or --from to put it next to the chat)
     #[arg(long = "in", value_name = "TAB")]
     pub in_tab: Option<String>,
     /// Pane to split when no Neovim exists yet (default: the current pane)
@@ -84,14 +86,11 @@ fn open(a: OpenArgs) -> Result<()> {
         println!("{v}");
     } else {
         println!(
-            "{} pane {} ({}) at {}",
+            "{} pane {} at {} — {}",
             if r.reused { "reused" } else { "opened" },
             r.pane_id,
-            match &r.split_from {
-                Some(f) => format!("new split of {f}"),
-                None => "existing Neovim".to_string(),
-            },
-            r.at
+            r.at,
+            r.summary
         );
     }
     Ok(())

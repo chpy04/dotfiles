@@ -166,13 +166,77 @@ tc tab close "$OTHER_TAB" --force >/dev/null 2>"$TMP/err"; rc=$?
 check "tab of another workspace refused (exit 6)" "$rc" 6
 grep -q -- "--workspace $WS2" "$TMP/err" && ok "message points at --workspace" || bad "scope message" "$(cat "$TMP/err")"
 check "other workspace's tab untouched" "$(rpc tab.list "{\"workspace_id\":\"$WS2\"}" | jq '.result.tabs | length')" 1
-tc view foo >/dev/null 2>"$TMP/err"; check "view is a Phase 3 stub (exit 1)" "$?" 1
+tc view foo >/dev/null 2>"$TMP/err"; check "view of an unknown diagram is a usage error (exit 2)" "$?" 2
 
 out=$(tc tab close "session refresh" --json); rc=$?
 check "close tether-made tab exit 0" "$rc" 0
 check "  it reported created_by_tether" "$(echo "$out" | jq -r .created_by_tether)" true
 check "  tab is gone" "$(tabs_json | jq -r --arg id "$TAB2" '[.[] | select(.tab_id==$id)] | length')" 0
 check "  state record removed" "$(jq -r --arg w "$WS" '.workspaces[$w].tabs // [] | length' "$TMP/state.json")" 0
+
+echo "# plain nvim (no tether-nvim wrapper) registers itself via the plugin; code open reuses it (finding 1a)"
+cat > "$TMP/plain-init.lua" <<L
+-- plugin-only init: nothing but the tether plugin on the runtimepath
+vim.opt.rtp:prepend("$ROOT/nvim")
+vim.opt.swapfile = false
+vim.opt.shadafile = "NONE"
+L
+out=$(tc tab open "plain nvim" --json -- sh -c 'sleep 600'); rc=$?
+check "tab for the plain nvim opened" "$rc" 0
+PTAB=$(echo "$out" | jq -r .tab_id); PPANE=$(echo "$out" | jq -r .pane_id)
+sleep 1
+# the pane's shell is the sandbox pane's own (Herdr sets HERDR_ENV/HERDR_PANE_ID there); sleep is replaced by our nvim
+rpc pane.send_keys "{\"pane_id\":\"$PPANE\",\"keys\":[\"ctrl+c\"]}" >/dev/null
+sleep 0.5
+rpc pane.send_input "$(jq -nc --arg p "$PPANE" --arg t "XDG_RUNTIME_DIR=$TMP/run exec nvim --clean -n -i NONE -u $TMP/plain-init.lua $OTHER" '{pane_id:$p,text:$t,keys:["enter"]}')" >/dev/null
+PSOCK="$(sockfor "$PPANE")"
+for i in $(seq 1 60); do [ -S "$PSOCK" ] && nvim_pos "$PSOCK" >/dev/null 2>&1 && break; sleep 0.25; done
+[ -S "$PSOCK" ] && ok "plain nvim opened the pane socket $PSOCK" || bad "plain nvim did not register" "no socket at $PSOCK"
+NP=$(pane_count)
+out=$(tc code open src/auth/session.ts:77 --in "plain nvim" --json); rc=$?
+check "code open exit 0" "$rc" 0
+check "  reused the plain nvim's pane" "$(echo "$out" | jq -r '"\(.reused) \(.pane_id)"')" "true $PPANE"
+check "  cursor is session.ts:77" "$(nvim_pos "$PSOCK")" "$SESSION:77"
+check "  no pane was created" "$(pane_count)" "$NP"
+tc tab close "plain nvim" >/dev/null 2>&1; check "plain-nvim tab closed (tether-made)" "$?" 0
+
+echo "# code open default placement away from the primary agent's tab (finding 7)"
+FLOG="$TMP/fake.log"; : > "$FLOG"
+rpc pane.send_input "$(jq -nc --arg p "$PANE1" --arg t "FAKE_LOG=$FLOG FAKE_WORK_SECS=1 $ROOT/spike/fake-agent.sh" '{pane_id:$p,text:$t,keys:["enter"]}')" >/dev/null
+for i in $(seq 1 100); do grep -q '"event": *"ready"' "$FLOG" 2>/dev/null && break; sleep 0.2; done
+grep -q '"event": *"ready"' "$FLOG" && ok "fake agent running in the sandbox's tab 1 pane" || bad "fake agent did not start"
+sleep 1
+check "agent is the primary (tab 1)" "$(tc agents --json | jq -r '.[0] | "\(.pane_id) \(.is_primary)"')" "$PANE1 true"
+T1_PANES=$(rpc pane.list "{\"workspace_id\":\"$WS\"}" | jq --arg t "$TAB1" '[.result.panes[] | select(.tab_id==$t)] | length')
+NT=$(tabs_json | jq length)
+out=$(tc code open src/other.ts:9 --json); rc=$?   # no --in, no --from: the current tab is the agent's
+echo "       $out"
+check "code open (default target) exit 0" "$rc" 0
+check "  new tab created" "$(echo "$out" | jq -r .tab_created)" true
+check "  tab named after the file" "$(echo "$out" | jq -r .tab_label)" "other.ts"
+NEWTAB=$(echo "$out" | jq -r .tab_id); NEWPANE=$(echo "$out" | jq -r .pane_id)
+check "  one more tab" "$(tabs_json | jq length)" $((NT+1))
+check "  agent's tab was not split" "$(rpc pane.list "{\"workspace_id\":\"$WS\"}" | jq --arg t "$TAB1" '[.result.panes[] | select(.tab_id==$t)] | length')" "$T1_PANES"
+check "  new tab is tether-made" "$(tc layout --json | jq -r --arg t "$NEWTAB" '.tabs[] | select(.tab_id==$t) | .created_by_tether')" true
+check "  active tab still the agent's (no focus stolen)" "$(rpc workspace.get "{\"workspace_id\":\"$WS\"}" | jq -r .result.workspace.active_tab_id)" "$TAB1"
+check "  Neovim is at other.ts:9" "$(nvim_pos "$(sockfor "$NEWPANE")")" "$OTHER:9"
+out=$(tc code open src/auth/session.ts:30 --json); rc=$?
+check "second default code open exit 0" "$rc" 0
+check "  reused the Neovim in the tether tab" "$(echo "$out" | jq -r '"\(.reused) \(.pane_id) \(.tab_created)"')" "true $NEWPANE false"
+check "  no extra tab" "$(tabs_json | jq length)" $((NT+1))
+check "  cursor session.ts:30" "$(nvim_pos "$(sockfor "$NEWPANE")")" "$SESSION:30"
+tc tab close "$NEWTAB" >/dev/null 2>&1; check "other.ts tab closed" "$?" 0
+echo "# explicit --in 1 still splits next to the chat (F1.7)"
+out=$(tc code open src/auth/session.ts:5 --in 1 --json); rc=$?
+check "code open --in 1 exit 0" "$rc" 0
+check "  split from the agent pane, no new tab" "$(echo "$out" | jq -r '"\(.reused) \(.split_from) \(.tab_created)"')" "false $PANE1 false"
+check "  agent's tab now has one more pane" "$(rpc pane.list "{\"workspace_id\":\"$WS\"}" | jq --arg t "$TAB1" '[.result.panes[] | select(.tab_id==$t)] | length')" $((T1_PANES+1))
+
+echo "# own tab: close / rename refused without --force (finding 14)"
+tc tab rename 1 "oops" >/dev/null 2>"$TMP/err"; check "rename own tab refused (exit 6)" "$?" 6
+tc tab close 1 >/dev/null 2>"$TMP/err"; check "close own tab refused (exit 6)" "$?" 6
+grep -q "your own tab" "$TMP/err" && ok "refusal names the reason" || bad "own-tab message" "$(cat "$TMP/err")"
+check "own tab label is not 'oops'" "$([ "$(tabs_json | jq -r --arg id "$TAB1" '.[] | select(.tab_id==$id) | .label')" != oops ] && echo yes)" yes
 
 echo "# hand-made tab unchanged at the end"
 AFTER_HM=$(tabs_json | jq -c --arg id "$HM_ID" '.[] | select(.tab_id==$id)')

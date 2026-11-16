@@ -13,5 +13,8 @@ TETHER_TEST_FILE="$HERE/test_comment.lua" nvim --headless -u "$HERE/minimal_init
 echo "== tether-nvim wrapper tests =="
 bash "$HERE/test_wrapper.sh" || rc=1
 
+echo "== socket registration tests =="
+bash "$HERE/test_register.sh" || rc=1
+
 [ $rc -eq 0 ] && echo "ALL NVIM TESTS PASSED" || echo "NVIM TESTS FAILED"
 exit $rc

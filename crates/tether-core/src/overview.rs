@@ -159,7 +159,8 @@ pub fn layout(client: &Client, scope: &Scope, store: &StateStore, runtime: &Path
     let in_ws: Vec<_> = snap.agents.iter().filter(|a| a.workspace_id == scope.workspace_id).cloned().collect();
     let ws_tabs: Vec<_> = snap.tabs.iter().filter(|t| t.workspace_id == scope.workspace_id).cloned().collect();
     let mut rows = workspace::build_rows(&in_ws, &ws_tabs, &scope.workspace_id);
-    workspace::apply_primary(&mut rows, &scope.workspace_id, store)?;
+    let pane_ids: Vec<String> = snap.panes.iter().filter(|p| p.workspace_id == scope.workspace_id).map(|p| p.pane_id.clone()).collect();
+    workspace::apply_primary(&mut rows, &scope.workspace_id, store, Some(&pane_ids), false)?; // read-only: never writes the tag
     let primary = rows.iter().find(|r| r.is_primary).map(|r| r.pane_id.clone());
 
     let command_of = |pane: &str| -> Option<String> {

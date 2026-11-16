@@ -3,9 +3,9 @@
 //! Slash-command policy (F2.6, decided): tether sends plain text only.
 //! * A comment body whose first non-blank character is `/` is **rejected** (exit code 2) rather
 //!   than rewritten, so the user's words are never silently altered; the message says how to
-//!   rephrase. (With the default template the submitted message starts with `[comment]`, so a
-//!   leading `/` in the body would be harmless, but a custom template could put `{text}` first,
-//!   so the body rule is applied unconditionally.)
+//!   rephrase. This body rule applies only when the template puts `{text}` first
+//!   (`clean_comment_text_for`); with the default template the submitted message starts with
+//!   `[comment]`, so a leading `/` in the body is harmless and allowed.
 //! * The final rendered payload must also not start with `/` or `!` (Claude Code's slash-command
 //!   and bash-mode triggers), guarding against custom templates.
 //! * C0/C1 control characters (notably ESC) are stripped from the body and code lines, so text
@@ -91,15 +91,31 @@ pub fn sanitize(s: &str) -> String {
         .collect()
 }
 
-/// Validate and clean a comment body: non-empty, no leading `/` (see module docs).
+/// Validate and clean a comment body: non-empty, no leading `/` (see module docs). The strict
+/// form, for callers that do not know the template; prefer `clean_comment_text_for`.
 pub fn clean_comment_text(text: &str) -> Result<String> {
+    clean_body(text, true)
+}
+
+/// True when the rendered message would begin with the comment body itself.
+pub fn template_starts_with_text(template: &str) -> bool {
+    template.trim_start().starts_with("{text}")
+}
+
+/// Like `clean_comment_text`, but the leading-`/` body check is kept only when `template` puts
+/// `{text}` first. (The final rendered payload is always checked by `check_payload`.)
+pub fn clean_comment_text_for(template: &str, text: &str) -> Result<String> {
+    clean_body(text, template_starts_with_text(template))
+}
+
+fn clean_body(text: &str, reject_leading_slash: bool) -> Result<String> {
     let t = sanitize(text);
     let t = t.trim_end().to_string();
     let t = t.trim_start_matches('\n').to_string();
     if t.trim().is_empty() {
         return Err(TetherError::Input("empty comment text".into()));
     }
-    if t.trim_start().starts_with('/') {
+    if reject_leading_slash && t.trim_start().starts_with('/') {
         return Err(TetherError::Input(
             "comment text must not start with `/` (tether sends plain text only, never slash commands); rephrase, e.g. start with a word".into(),
         ));
@@ -134,6 +150,20 @@ pub struct PayloadParts {
     pub text: String,
 }
 
+/// Longest code line (in characters) put into a comment; longer lines are cut and end with `…`.
+/// TODO(orchestrator): make this `[comment] max_code_line_width` in config.rs (not edited here
+/// to avoid clashing with the viewer work).
+pub const MAX_CODE_LINE_WIDTH: usize = 200;
+
+fn clip_line(l: &str) -> String {
+    let l = sanitize(l);
+    let l = l.trim_end();
+    match l.char_indices().nth(MAX_CODE_LINE_WIDTH) {
+        Some((i, _)) => format!("{}…", &l[..i]),
+        None => l.to_string(),
+    }
+}
+
 /// Format code lines as `  142 │ text` (numbers right-aligned to the widest). If `hidden > 0`
 /// a final `  … (N more lines)` line is added.
 pub fn format_code(lines: &[(u32, String)], hidden: usize) -> String {
@@ -143,7 +173,7 @@ pub fn format_code(lines: &[(u32, String)], hidden: usize) -> String {
     let width = lines.iter().map(|(n, _)| n.to_string().len()).max().unwrap_or(1);
     let mut out: Vec<String> = lines
         .iter()
-        .map(|(n, l)| format!("  {n:>width$} │ {}", sanitize(l).trim_end()))
+        .map(|(n, l)| format!("  {n:>width$} │ {}", clip_line(l)))
         .collect();
     if hidden > 0 {
         out.push(format!("  … ({hidden} more line{})", if hidden == 1 { "" } else { "s" }));
@@ -270,7 +300,7 @@ pub fn read_code_lines(file: &Path, start: u32, end: u32, max_lines: usize) -> (
 /// Build the message for a code-ref comment. `cwd` resolves relative paths and is the fallback
 /// "worktree" when the file is not in a git repository.
 pub fn prepare_comment(cfg: &CommentConfig, r: &CodeRef, text: &str, cwd: &Path) -> Result<Prepared> {
-    let text = clean_comment_text(text)?;
+    let text = clean_comment_text_for(&cfg.template, text)?;
     let given = Path::new(&r.path);
     let abs = canonical_or_self(&if given.is_absolute() { given.to_path_buf() } else { cwd.join(given) });
     let (worktree, rel_path) = match git_toplevel(&abs) {
@@ -298,6 +328,156 @@ pub fn prepare_comment(cfg: &CommentConfig, r: &CodeRef, text: &str, cwd: &Path)
     let payload = render_template(&cfg.template, &parts);
     check_payload(&payload)?;
     Ok(Prepared { payload, worktree: parts.worktree, rel_path: parts.path })
+}
+
+// ---------------------------------------------------------------------------------------------
+// Comments on diagram elements (F3.3)
+// ---------------------------------------------------------------------------------------------
+
+/// The diagram element a comment is about (F3.3).
+#[derive(Debug, Clone)]
+pub struct DiagramTarget<'a> {
+    /// Diagram title.
+    pub diagram_title: &'a str,
+    /// `node`, `participant`, `message` or `note`.
+    pub kind: &'a str,
+    /// The element's label (node label, message label, note text).
+    pub label: &'a str,
+    /// Its code link, if any. Re-resolved against the files so the line shown is the live one.
+    pub code: Option<&'a crate::diagram::CodeRef>,
+}
+
+fn one_line(s: &str) -> String {
+    sanitize(s).split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Build the message for a comment on a diagram element:
+///
+/// ```text
+/// [comment] diagram "Session refresh" › node "Token expired?"  src/auth/session.ts:142  (worktree: feat-login)
+///   142 │ if (token.expiresAt < Date.now()) {
+/// <text>
+/// ```
+///
+/// The code ref is re-resolved with its anchor first: a moved link shows the new line; a stale or
+/// missing link keeps the stored `path:line`, gets a `[stale link]` / `[file missing]` marker and
+/// no code lines (we never show the wrong line). Elements without code omit the ref and the code
+/// lines. The `[comment] template` does not apply (this format is fixed). `worktree_root` is the
+/// worktree the diagram store lives in.
+pub fn prepare_diagram_comment(cfg: &CommentConfig, t: &DiagramTarget<'_>, text: &str, worktree_root: &Path) -> Result<Prepared> {
+    use crate::diagram::Resolved;
+    let text = clean_comment_text(text)?;
+    let root = canonical_or_self(worktree_root);
+    let worktree = sanitize(&basename(&root));
+    let mut header = format!("[comment] diagram \"{}\" › {} \"{}\"", one_line(t.diagram_title), t.kind, one_line(t.label));
+    let mut code_block = String::new();
+    let mut rel_path = String::new();
+    if let Some(c) = t.code {
+        rel_path = sanitize(&c.path);
+        let resolved = crate::diagram::resolve(c, &root);
+        let (line, usable, marker) = match resolved {
+            Resolved::Exact(l) => (l, true, None),
+            Resolved::Moved(l) => (l, true, None),
+            Resolved::Stale => (c.line, false, Some("stale link")),
+            Resolved::MissingFile => (c.line, false, Some("file missing")),
+        };
+        let end = c.end_line.map(|e| ((e as i64) + (line as i64 - c.line as i64)).max(line as i64) as u32);
+        let range = match end {
+            Some(e) if e > line => format!("{line}-{e}"),
+            _ => line.to_string(),
+        };
+        header.push_str(&format!("  {rel_path}:{range}"));
+        if let Some(m) = marker {
+            header.push_str(&format!("  [{m}]"));
+        }
+        if usable {
+            let (lines, hidden) = read_code_lines(&root.join(&c.path), line, end.unwrap_or(line), cfg.max_code_lines);
+            code_block = format_code(&lines, hidden);
+        }
+    }
+    header.push_str(&format!("  (worktree: {worktree})"));
+    let payload = if code_block.is_empty() { format!("{header}\n{text}") } else { format!("{header}\n{code_block}\n{text}") };
+    check_payload(&payload)?;
+    Ok(Prepared { payload, worktree, rel_path })
+}
+
+#[cfg(test)]
+mod diagram_comment_tests {
+    use super::*;
+    use crate::diagram::CodeRef as SpecRef;
+
+    fn repo() -> (tempfile::TempDir, PathBuf) {
+        let d = tempfile::tempdir().unwrap();
+        let root = d.path().join("feat-login");
+        std::fs::create_dir_all(root.join("src/auth")).unwrap();
+        let body = (1..=200)
+            .map(|n| if n == 142 { "if (token.expiresAt < Date.now()) {".to_string() } else { format!("line {n}") })
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(root.join("src/auth/session.ts"), body).unwrap();
+        (d, root)
+    }
+
+    fn sref(line: u32, anchor: Option<&str>) -> SpecRef {
+        SpecRef { path: "src/auth/session.ts".into(), line, end_line: None, anchor: anchor.map(Into::into) }
+    }
+
+    fn target<'a>(code: Option<&'a SpecRef>) -> DiagramTarget<'a> {
+        DiagramTarget { diagram_title: "Session refresh", kind: "node", label: "Token expired?", code }
+    }
+
+    #[test]
+    fn matches_the_prd_example() {
+        let (_d, root) = repo();
+        let c = sref(142, Some("token.expiresAt <"));
+        let p = prepare_diagram_comment(&CommentConfig::default(), &target(Some(&c)), "Why client clock?", &root).unwrap();
+        assert_eq!(
+            p.payload,
+            "[comment] diagram \"Session refresh\" › node \"Token expired?\"  src/auth/session.ts:142  (worktree: feat-login)\n  142 │ if (token.expiresAt < Date.now()) {\nWhy client clock?"
+        );
+        assert_eq!(p.worktree, "feat-login");
+        assert_eq!(p.rel_path, "src/auth/session.ts");
+    }
+
+    #[test]
+    fn moved_link_shows_the_live_line_and_stale_link_shows_no_code() {
+        let (_d, root) = repo();
+        let c = sref(150, Some("token.expiresAt <"));
+        let p = prepare_diagram_comment(&CommentConfig::default(), &target(Some(&c)), "q", &root).unwrap();
+        assert!(p.payload.contains("src/auth/session.ts:142  (worktree"), "{}", p.payload);
+        assert!(p.payload.contains("\n  142 │ if (token.expiresAt"), "{}", p.payload);
+
+        let c = sref(150, Some("no such anchor anywhere"));
+        let p = prepare_diagram_comment(&CommentConfig::default(), &target(Some(&c)), "q", &root).unwrap();
+        assert_eq!(
+            p.payload,
+            "[comment] diagram \"Session refresh\" › node \"Token expired?\"  src/auth/session.ts:150  [stale link]  (worktree: feat-login)\nq"
+        );
+        let c = SpecRef { path: "src/gone.ts".into(), line: 3, end_line: None, anchor: None };
+        let p = prepare_diagram_comment(&CommentConfig::default(), &target(Some(&c)), "q", &root).unwrap();
+        assert!(p.payload.contains("[file missing]"), "{}", p.payload);
+    }
+
+    #[test]
+    fn no_code_ranges_and_hygiene() {
+        let (_d, root) = repo();
+        let p = prepare_diagram_comment(&CommentConfig::default(), &target(None), "plain", &root).unwrap();
+        assert_eq!(p.payload, "[comment] diagram \"Session refresh\" › node \"Token expired?\"  (worktree: feat-login)\nplain");
+        assert_eq!(p.rel_path, "");
+
+        let mut c = sref(140, None);
+        c.end_line = Some(142);
+        let p = prepare_diagram_comment(&CommentConfig::default(), &target(Some(&c)), "r", &root).unwrap();
+        assert!(p.payload.contains("src/auth/session.ts:140-142"), "{}", p.payload);
+        assert!(p.payload.contains("  140 │ line 140\n  141 │ line 141\n  142 │ if (token"), "{}", p.payload);
+
+        // multi-line labels collapse, control chars vanish, slash policy still applies
+        let t = DiagramTarget { diagram_title: "A\nB\x1b[0m", kind: "message", label: "x\n y", code: None };
+        let p = prepare_diagram_comment(&CommentConfig::default(), &t, "ok", &root).unwrap();
+        assert!(p.payload.starts_with("[comment] diagram \"A B[0m\" › message \"x y\""), "{}", p.payload);
+        assert!(prepare_diagram_comment(&CommentConfig::default(), &target(None), "/clear", &root).is_err());
+        assert!(prepare_diagram_comment(&CommentConfig::default(), &target(None), "  ", &root).is_err());
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -447,6 +627,39 @@ mod tests {
         // a slash later in the text is fine
         assert_eq!(clean_comment_text("see /etc/hosts").unwrap(), "see /etc/hosts");
         assert_eq!(clean_comment_text("a\n/b").unwrap(), "a\n/b");
+    }
+
+    #[test]
+    fn leading_slash_body_is_allowed_unless_the_template_puts_text_first() {
+        // default template starts with `[comment]`: a body beginning with `/` is harmless
+        assert_eq!(clean_comment_text_for(DEFAULT_TEMPLATE, "/etc/hosts is wrong").unwrap(), "/etc/hosts is wrong");
+        assert!(template_starts_with_text("{text}\n{path}") && template_starts_with_text("  {text}"));
+        assert!(!template_starts_with_text(DEFAULT_TEMPLATE));
+        for t in ["{text}", "  {text} @ {path}"] {
+            let e = clean_comment_text_for(t, "/clear").unwrap_err();
+            assert_eq!(e.exit_code(), crate::error::exit::USAGE, "{t}");
+        }
+        // end to end: prepare_comment with the default template sends the slash body, with `{text}` first it refuses
+        let dir = tempfile::tempdir().unwrap();
+        let r: CodeRef = "x.rs:1".parse().unwrap();
+        let p = prepare_comment(&cfg(), &r, "/clear please explain", dir.path()).unwrap();
+        assert!(p.payload.starts_with("[comment] ") && p.payload.ends_with("/clear please explain"), "{}", p.payload);
+        let mut c = cfg();
+        c.template = "{text}".into();
+        assert!(prepare_comment(&c, &r, "/clear", dir.path()).is_err());
+        // empty text is still rejected either way
+        assert!(clean_comment_text_for(DEFAULT_TEMPLATE, " \n").is_err());
+    }
+
+    #[test]
+    fn long_code_lines_are_cut_at_200_chars() {
+        let long = "é".repeat(500);
+        let out = format_code(&[(1, long.clone()), (2, "short".into()), (3, "x".repeat(200))], 0);
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(lines[0].chars().filter(|&c| c == 'é').count(), MAX_CODE_LINE_WIDTH);
+        assert!(lines[0].ends_with('…'));
+        assert_eq!(lines[1], "  2 │ short");
+        assert!(!lines[2].ends_with('…'), "exactly 200 chars is not cut");
     }
 
     #[test]

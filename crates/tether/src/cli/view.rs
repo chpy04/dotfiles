@@ -1,15 +1,43 @@
 use clap::Args;
+use tether_core::diagram::DiagramStore;
 use tether_core::error::{Result, TetherError};
+
+use super::diagram::{open_diagram, parse_placement, Placement};
+use crate::view;
 
 #[derive(Args)]
 pub struct ViewArgs {
-    /// Arguments are accepted and ignored until the viewer exists
-    #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
-    pub args: Vec<String>,
+    /// Diagram id (see `tether diagram list`)
+    pub id: String,
+    /// Where to show it: `tab`, `split` or `here`. Without it the viewer runs in this pane
+    #[arg(long, value_name = "tab|split|here")]
+    pub placement: Option<String>,
+    /// Pane to split for `--placement split` (default: the current pane)
+    #[arg(long, value_name = "PANE")]
+    pub pane: Option<String>,
+    /// Switch to the new tab/pane (default: do not steal focus)
+    #[arg(long)]
+    pub focus: bool,
 }
 
-pub fn run(_a: ViewArgs) -> Result<()> {
-    Err(TetherError::Other(
-        "`tether view` (the diagram viewer) arrives in Phase 3; until then use `tether tab open` / `tether code open`".into(),
-    ))
+pub fn run(a: ViewArgs) -> Result<()> {
+    let placement = match a.placement.as_deref() {
+        None => Placement::Here,
+        Some(p) => match parse_placement(p)? {
+            Placement::None => return Err(TetherError::Input("--placement none makes no sense for `tether view`".into())),
+            p => p,
+        },
+    };
+    if placement == Placement::Here {
+        return view::run(&a.id);
+    }
+    let cwd = std::env::current_dir().map_err(|e| TetherError::Other(format!("cannot determine cwd: {e}")))?;
+    let store = DiagramStore::open(&cwd);
+    let d = store.get(&a.id).map_err(|e| TetherError::Input(e.to_string()))?;
+    let o = open_diagram(&a.id, d.title(), placement, a.pane.as_deref(), a.focus, store.worktree_root())?;
+    match o.mode {
+        "tab" => println!("opened tab \"{}\" ({})", o.label.unwrap_or_default(), o.tab_id.unwrap_or_default()),
+        _ => println!("opened pane {}", o.pane_id.unwrap_or_default()),
+    }
+    Ok(())
 }

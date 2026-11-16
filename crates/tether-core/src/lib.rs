@@ -14,3 +14,4 @@ pub mod tabs;
 pub mod testing;
 pub mod workspace;
 pub mod layout;
+pub mod theme;

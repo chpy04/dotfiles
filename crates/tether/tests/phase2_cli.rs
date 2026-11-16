@@ -161,12 +161,12 @@ fn split_prints_the_new_pane_id_and_refuses_other_workspaces() {
 }
 
 #[test]
-fn view_is_a_stub_and_outside_herdr_is_exit_3() {
+fn view_unknown_diagram_is_usage_error_and_outside_herdr_is_exit_3() {
     let env = Env::new();
     let h = fake();
     let o = env.cmd(&h).args(["view", "some-id"]).output().unwrap();
-    assert_eq!(o.status.code(), Some(1));
-    assert!(err(&o).contains("Phase 3"), "{}", err(&o));
+    assert_eq!(o.status.code(), Some(2));
+    assert!(err(&o).contains("diagram not found"), "{}", err(&o));
     let o = env.cmd(&h).env_remove("HERDR_WORKSPACE_ID").arg("layout").output().unwrap();
     assert_eq!(o.status.code(), Some(3));
     // an explicit --workspace works without HERDR_WORKSPACE_ID

@@ -125,6 +125,17 @@ fn refuse_foreign_tab(action: &str, tab: &Tab) -> TetherError {
     ))
 }
 
+/// The caller's own tab (`HERDR_TAB_ID`): closing or renaming it pulls the floor out from under
+/// whoever runs tether (usually the agent), so it needs `--force`.
+fn refuse_own_tab(action: &str, scope: &Scope, tab: &Tab) -> Option<TetherError> {
+    (scope.tab_id.as_deref() == Some(tab.tab_id.as_str())).then(|| {
+        TetherError::Refused(format!(
+            "refusing to {action} tab {} \"{}\" ({}): it is the tab tether is running in (your own tab); pass --force to override",
+            tab.number, tab.label, tab.tab_id
+        ))
+    })
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct TabChange {
     pub tab_id: String,
@@ -137,6 +148,9 @@ pub struct TabChange {
 pub fn close_tab(client: &Client, store: &StateStore, scope: &Scope, spec: &str, force: bool) -> Result<TabChange> {
     let tab = resolve_scoped(client, scope, store, spec)?;
     let owned = store.is_owned_tab(&scope.workspace_id, &tab.tab_id);
+    if let Some(e) = refuse_own_tab("close", scope, &tab).filter(|_| !force) {
+        return Err(e);
+    }
     if !owned && !force {
         return Err(refuse_foreign_tab("close", &tab));
     }
@@ -153,6 +167,9 @@ pub fn rename_tab(client: &Client, store: &StateStore, scope: &Scope, spec: &str
     }
     let tab = resolve_scoped(client, scope, store, spec)?;
     let owned = store.is_owned_tab(&scope.workspace_id, &tab.tab_id);
+    if let Some(e) = refuse_own_tab("rename", scope, &tab).filter(|_| !force) {
+        return Err(e);
+    }
     if !owned && !force {
         return Err(refuse_foreign_tab("rename", &tab));
     }
@@ -328,10 +345,32 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let store = StateStore::new(d.path().join("state.json"));
         // a record for a tab that no longer exists, and one for w1:t2 which does exist now
-        store.add_owned_tab("w1", "w1:t55", "gone").unwrap();
+        store.add_owned_tab_at("w1", "w1:t55", "gone", 1_000).unwrap();
+        // a record created just now for a tab the (earlier) list does not show: kept (grace period)
+        store.add_owned_tab("w1", "w1:t56", "just made").unwrap();
         let c = Client::new(f.path());
         let _ = scoped_tabs(&c, &scope(), &store).unwrap();
-        assert!(store.owned_tabs("w1").is_empty());
+        let ids: Vec<_> = store.owned_tabs("w1").into_iter().map(|t| t.tab_id).collect();
+        assert_eq!(ids, ["w1:t56"]);
+    }
+
+    #[test]
+    fn own_tab_needs_force_for_close_and_rename() {
+        let f = fake();
+        let d = tempfile::tempdir().unwrap();
+        let store = StateStore::new(d.path().join("state.json"));
+        let c = Client::new(f.path());
+        // even a tether-made tab is protected when it is the caller's own
+        store.add_owned_tab("w1", "w1:t1", "mine").unwrap();
+        let e = close_tab(&c, &store, &scope(), "w1:t1", false).unwrap_err();
+        assert!(matches!(e, TetherError::Refused(_)) && e.to_string().contains("your own tab"), "{e}");
+        let e = rename_tab(&c, &store, &scope(), "1", "x", false).unwrap_err();
+        assert!(matches!(e, TetherError::Refused(_)) && e.to_string().contains("your own tab"), "{e}");
+        assert!(f.requests_for("tab.close").is_empty() && f.requests_for("tab.rename").is_empty());
+        // --force goes through
+        rename_tab(&c, &store, &scope(), "1", "x", true).unwrap();
+        close_tab(&c, &store, &scope(), "w1:t1", true).unwrap();
+        assert_eq!(f.requests_for("tab.close")[0].params["tab_id"], "w1:t1");
     }
 
     #[test]

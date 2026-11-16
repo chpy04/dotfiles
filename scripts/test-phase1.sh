@@ -70,7 +70,7 @@ check "kind" "$(echo "$out" | jq -r '.[0].kind')" claude
 check "tab index" "$(echo "$out" | jq -r '.[0].tab_index')" 1
 check "is_primary" "$(echo "$out" | jq -r '.[0].is_primary')" true
 check "state is idle or done" "$(echo "$out" | jq -r '.[0].state | IN("idle","done")')" true
-check "primary persisted in state file" "$(jq -r --arg w "$WS" '.workspaces[$w].primary_pane' "$TMP/state.json")" "$PANE"
+check "agents is read-only: no primary tag written yet" "$([ -e "$TMP/state.json" ] && echo written || echo none)" none
 
 echo "# send x5 (sequential, each after the agent settles)"
 SINCE=$(python3 -c 'import time;print(time.time())'); EXP="$TMP/expected.bin"; : > "$EXP"
@@ -87,6 +87,7 @@ send_one() { # relpath start end text
   python3 "$PYC" wait "$LOG" "$SINCE" "$n" 20 >/dev/null || bad "send $n arrived at the agent"
 }
 send_one src/auth/session.ts 142 142 "Why client clock instead of server time here?"
+check "first send persisted the primary tag in the state file" "$(jq -r --arg w "$WS" '.workspaces[$w].primary_pane' "$TMP/state.json")" "$PANE"
 send_one src/auth/session.ts 10 14 $'Multi-line question\nsecond line: does this │ box char survive?\nthird'
 send_one src/auth/session.ts 1 1 "Unicode ✓ — naïve café 日本語 🦀"
 send_one src/auth/session.ts 198 200 "Range at the end of the file"
@@ -133,7 +134,10 @@ fi
 python3 "$PYC" report "$PANE" idle; sleep 0.5
 
 echo "# errors"
-tc send --ref src/auth/session.ts:3 --text "/clear" >/dev/null 2>"$TMP/err"; check "slash-command body rejected (exit 2)" "$?" 2
+# a body starting with `/` is harmless under the default template ([comment] first) and refused only when the
+# template begins with {text}; the refusal case needs its own config so nothing is delivered
+printf '[comment]\ntemplate = "{text} [{path}:{line}]"\n' > "$TMP/texttpl.toml"
+(cd "$REPO" && env HERDR_WORKSPACE_ID="$WS" HERDR_TAB_ID="$TAB" HERDR_PANE_ID="$PANE" TETHER_STATE="$TMP/state.json" TETHER_CONFIG="$TMP/texttpl.toml" "$TETHER_BIN" send --ref src/auth/session.ts:3 --text "/clear" >/dev/null 2>"$TMP/err"); check "slash body refused when the template starts with {text} (exit 2)" "$?" 2
 tc send --ref nonsense --text "x" >/dev/null 2>"$TMP/err"; check "bad --ref rejected (exit 2)" "$?" 2
 tc send --to nobody --ref src/auth/session.ts:3 --text "x" >/dev/null 2>"$TMP/err"; check "unknown target (exit 5)" "$?" 5
 env -u HERDR_WORKSPACE_ID -u HERDR_PANE_ID -u HERDR_TAB_ID "$TETHER_BIN" send --ref a:1 --text x >/dev/null 2>"$TMP/err"; rc=$?

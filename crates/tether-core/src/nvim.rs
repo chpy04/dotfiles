@@ -331,7 +331,12 @@ pub fn exec_lua(sock: &Path, code: &str, args: serde_json::Value, timeout: Durat
 pub const JUMP_LUA: &str = r#"
 local a = ...
 local f = vim.fn.resolve(vim.fn.fnamemodify(a[1], ":p"))
-local b = vim.fn.bufnr(f)
+-- compare normalized names; vim.fn.bufnr(f) treats `[slug]` etc. as a glob pattern
+local b = -1
+for _, nr in ipairs(vim.api.nvim_list_bufs()) do
+  local nm = vim.api.nvim_buf_get_name(nr)
+  if nm ~= "" and vim.fn.resolve(vim.fn.fnamemodify(nm, ":p")) == f then b = nr break end
+end
 local w = b > 0 and vim.fn.bufwinid(b) or -1
 if w > 0 then vim.api.nvim_set_current_win(w)
 else vim.cmd("hide edit " .. vim.fn.fnameescape(f)) end
@@ -558,6 +563,16 @@ mod tests {
         // second jump: same buffer, cursor moves; past EOF clamps
         assert_eq!(jump(&sock, &file, 7, None).unwrap(), format!("{}:7", file.display()));
         assert_eq!(jump(&sock, &file, 9999, None).unwrap(), format!("{}:100", file.display()));
+        // finding 11: `[slug]` is a glob to vim.fn.bufnr(); the buffer for `s/page.tsx` must not match it
+        std::fs::create_dir_all(dir.join("s")).unwrap();
+        std::fs::create_dir_all(dir.join("[slug]")).unwrap();
+        let plain = dir.join("s/page.tsx");
+        let slug = dir.join("[slug]/page.tsx");
+        std::fs::write(&plain, "plain\n".repeat(5)).unwrap();
+        std::fs::write(&slug, "slug\n".repeat(5)).unwrap();
+        assert_eq!(jump(&sock, &plain, 2, None).unwrap(), format!("{}:2", plain.display()));
+        assert_eq!(jump(&sock, &slug, 3, None).unwrap(), format!("{}:3", slug.display()));
+        assert_eq!(jump(&sock, &plain, 4, None).unwrap(), format!("{}:4", plain.display()));
         let _ = child.kill();
         let _ = child.wait();
     }

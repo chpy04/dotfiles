@@ -17,6 +17,10 @@ pub struct Config {
     pub comment: CommentConfig,
     pub placement: Placement,
     pub nvim: NvimConfig,
+    /// Diagram viewer behaviour (`[view]`).
+    pub view: ViewConfig,
+    /// Diagram viewer colors (`[theme]`).
+    pub theme: crate::theme::ThemeConfig,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -36,6 +40,8 @@ pub struct Keys {
     pub view_search: String,
     pub view_search_next: String,
     pub view_quit: String,
+    /// What `<leader>` stands for in key sequences (viewer and Neovim). Default: space.
+    pub leader: String,
 }
 
 impl Default for Keys {
@@ -52,6 +58,7 @@ impl Default for Keys {
             view_search: "/".into(),
             view_search_next: "n".into(),
             view_quit: "q".into(),
+            leader: " ".into(),
         }
     }
 }
@@ -89,6 +96,21 @@ impl Default for Placement {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
+pub struct ViewConfig {
+    /// Draw Nerd Font icons. `false` (or `TETHER_ICONS=0`) falls back to plain Unicode glyphs.
+    pub icons: bool,
+    /// Capture the mouse in the viewer (click to focus, wheel to scroll).
+    pub mouse: bool,
+}
+
+impl Default for ViewConfig {
+    fn default() -> Self {
+        ViewConfig { icons: true, mouse: true }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
 pub struct NvimConfig {
     /// Command used to launch Neovim (word-split by `bin/tether-nvim`; may contain flags).
     pub command: String,
@@ -101,7 +123,7 @@ impl Default for NvimConfig {
 }
 
 /// Commented default config written by `tether config init`.
-pub const DEFAULT_FILE: &str = r#"# tether configuration. Every key is optional; the values shown are the defaults.
+pub const DEFAULT_FILE: &str = r##"# tether configuration. Every key is optional; the values shown are the defaults.
 
 [keys]
 # Neovim: comment on the current line (normal mode) or the selected range (visual mode).
@@ -118,6 +140,8 @@ view_details = "<Tab>"
 view_search = "/"
 view_search_next = "n"
 view_quit = "q"
+# What <leader> means in key sequences such as "<leader>ac".
+leader = " "
 
 [comment]
 # Payload sent to the agent. Placeholders:
@@ -143,10 +167,38 @@ code_direction = "right"
 # Fraction of the space the existing pane keeps when splitting.
 code_ratio = 0.5
 
+[view]
+# Nerd Font icons in the diagram viewer (false = plain Unicode glyphs; env TETHER_ICONS=0 also does it).
+icons = true
+# Mouse support in the viewer (click to focus, wheel to scroll).
+mouse = true
+
+# Viewer colors default to Catppuccin Mocha. Every key is optional ("#rrggbb"); uncomment to override.
+[theme]
+name = "catppuccin-mocha"
+# accent = "#89b4fa"      # focus fill, incident edges, comment float
+# accent_fg = "#11111b"   # text on the accent fill
+# focus_border = "#b4befe"
+# bg = "#1e1e2e"
+# bar = "#181825"
+# fg = "#cdd6f4"
+# dim = "#a6adc8"
+# edge = "#585b70"
+# panel = "#313244"
+# warn = "#fab387"
+# error = "#f38ba8"
+# ok = "#a6e3a1"
+# link = "#74c7ec"
+# search = "#f9e2af"
+# [theme.fills]           # box backgrounds: process decision terminal io subroutine database
+# decision = "#2b2840"    #   actor service queue external note alt opt loop par
+# [theme.borders]         # box borders and icons, same keys
+# decision = "#cba6f7"
+
 [nvim]
 # Command used to launch Neovim from `tether-nvim` and `tether code open`.
 command = "nvim"
-"#;
+"##;
 
 /// The config path: `$TETHER_CONFIG`, else `$XDG_CONFIG_HOME/tether/config.toml`,
 /// else `~/.config/tether/config.toml`.
@@ -178,6 +230,7 @@ impl Config {
         if self.comment.max_code_lines == 0 {
             return Err(TetherError::Config("invalid config: [comment] max_code_lines must be at least 1".into()));
         }
+        crate::theme::Theme::from_config(&self.theme).map_err(|e| TetherError::Config(format!("invalid config: {e}")))?;
         Ok(())
     }
 
@@ -280,5 +333,31 @@ mod tests {
         assert_eq!(c.get("nvim.command").unwrap(), serde_json::json!("nvim"));
         assert_eq!(c.get("keys.comment").unwrap(), serde_json::json!("<leader>ac"));
         assert!(c.get("nope.x").is_none());
+    }
+}
+
+#[cfg(test)]
+mod view_config_tests {
+    use super::*;
+
+    #[test]
+    fn viewer_sections_parse_and_validate() {
+        let c = Config::parse("[keys]\nleader = \",\"\n[view]\nicons = false\nmouse = false\n[theme]\naccent = \"#ff8800\"\n[theme.fills]\nio = \"#101010\"\n").unwrap();
+        assert_eq!(c.keys.leader, ",");
+        assert!(!c.view.icons && !c.view.mouse);
+        assert_eq!(c.theme.accent.as_deref(), Some("#ff8800"));
+        assert_eq!(c.get("theme.fills.io").unwrap(), serde_json::json!("#101010"));
+        let d = Config::default();
+        assert_eq!(d.keys.leader, " ");
+        assert!(d.view.icons && d.view.mouse);
+        assert_eq!(d.theme.name, "catppuccin-mocha");
+    }
+
+    #[test]
+    fn bad_theme_colors_are_config_errors_naming_the_key() {
+        let e = Config::parse("[theme]\naccent = \"blue\"\n").unwrap_err();
+        assert!(e.to_string().contains("theme.accent"), "{e}");
+        assert!(Config::parse("[theme.borders]\nnope = \"#000000\"\n").is_err());
+        assert!(Config::parse("[view]\nicon = true\n").is_err(), "unknown keys stay an error");
     }
 }

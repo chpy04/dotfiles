@@ -9,6 +9,7 @@
 mod agents;
 mod code;
 mod config_cmd;
+mod diagram;
 mod layout;
 mod send;
 mod split;
@@ -44,7 +45,10 @@ enum Command {
     /// Open code in Neovim
     #[command(subcommand)]
     Code(code::CodeCmd),
-    /// Show a diagram (arrives in Phase 3)
+    /// Create, list, show, export, update or delete diagrams (flowcharts, sequence diagrams)
+    #[command(subcommand)]
+    Diagram(diagram::DiagramCmd),
+    /// Show a stored diagram in the viewer (in this pane, or --placement tab|split)
     View(view::ViewArgs),
 }
 
@@ -58,6 +62,7 @@ fn wants_json(cmd: &Command) -> bool {
         Command::Tab(c) => c.wants_json(),
         Command::Split(a) => a.json,
         Command::Code(c) => c.wants_json(),
+        Command::Diagram(c) => c.wants_json(),
         Command::View(_) => false,
     }
 }
@@ -73,6 +78,7 @@ pub fn run() -> i32 {
         Command::Tab(c) => tab::run(c),
         Command::Split(a) => split::run(a),
         Command::Code(c) => code::run(c),
+        Command::Diagram(c) => diagram::run(c),
         Command::View(a) => view::run(a),
     };
     match result {

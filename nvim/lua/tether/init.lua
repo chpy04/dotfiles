@@ -76,9 +76,21 @@ local function run_tether(args, cb)
   end
 end
 
+--- Why a failed `tether send` failed, in one line. Exit 124 (killed by our timeout) or no stderr at
+--- all is "timed out / no output", not an unknown error.
+function M.describe_failure(code, stderr, timeout_ms)
+  local err = vim.trim(stderr or ""):gsub("tether: error: ", "")
+  if code == 124 then
+    return ("tether timed out after %ds (no answer; is Herdr responsive?)"):format(math.floor((timeout_ms or 0) / 1000))
+  end
+  if err == "" then
+    return "tether produced no output (timed out or was killed)"
+  end
+  return err
+end
+
 local function send(ref, target, text)
   run_tether({ "send", "--to", target, "--ref", ref, "--text", text }, function(code, stdout, stderr)
-    local err = vim.trim(stderr):gsub("tether: error: ", "")
     if code == 0 then
       local msg = first_line(stdout)
       if msg == "" then
@@ -91,10 +103,15 @@ local function send(ref, target, text)
         notify(msg)
       end
     else
-      if err == "" then
-        err = "unknown error"
-      end
-      notify(("send failed (exit %d): %s"):format(code, err), vim.log.levels.ERROR)
+      -- never lose what the user typed: keep it in register t
+      pcall(vim.fn.setreg, "t", text)
+      notify(
+        ("send failed (exit %d): %s\ncomment saved to register t (\"tp pastes it)"):format(
+          code,
+          M.describe_failure(code, stderr, M.opts.timeout_ms)
+        ),
+        vim.log.levels.ERROR
+      )
     end
   end)
 end
@@ -212,15 +229,10 @@ local function unmap_all()
   mapped = {}
 end
 
-function M.setup(opts)
+local setup_gen = 0
+
+local function apply_keys()
   unmap_all()
-  M.opts = config.resolve(opts)
-  M._setup_done = true
-  float.define_highlights()
-  vim.api.nvim_create_autocmd("ColorScheme", {
-    group = vim.api.nvim_create_augroup("TetherHighlights", { clear = true }),
-    callback = float.define_highlights,
-  })
   local keys = M.opts.keys
   local function map(modes, lhs, fn, desc)
     if lhs and lhs ~= "" and lhs ~= false then
@@ -236,6 +248,39 @@ function M.setup(opts)
   map({ "n", "x" }, keys.comment_pick, function()
     M.comment_pick()
   end, "tether: comment on line/selection to a picked agent")
+end
+
+--- The CLI config arrived (asynchronously): remap if it asks for other keys than we mapped.
+local function apply_cli_config(gen, cli)
+  if gen ~= setup_gen or not cli then
+    return
+  end
+  local resolved = config.resolve(M._user_opts, cli)
+  if not vim.deep_equal(resolved.keys, M.opts.keys) then
+    M.opts = resolved
+    apply_keys()
+  end
+end
+
+--- Map the keys from Lua defaults + opts right away (no process is spawned, nothing blocks). Inside
+--- Herdr the tether config is then read in the background; keys it defines remap when it arrives.
+function M.setup(opts)
+  M._user_opts = opts
+  M.opts = config.resolve(opts)
+  M._setup_done = true
+  setup_gen = setup_gen + 1
+  float.define_highlights()
+  vim.api.nvim_create_autocmd("ColorScheme", {
+    group = vim.api.nvim_create_augroup("TetherHighlights", { clear = true }),
+    callback = float.define_highlights,
+  })
+  apply_keys()
+  if M.opts.read_config and in_herdr() then
+    local gen = setup_gen
+    config.read_cli_config_async(M.opts.bin, function(cli)
+      apply_cli_config(gen, cli)
+    end)
+  end
 end
 
 return M

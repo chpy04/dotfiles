@@ -123,6 +123,10 @@ local function title_text(cfg)
 end
 
 local function main()
+-- the binary lookup is tested on its own below; here it is always plain `tether`
+require("tether.config").find_bin = function(b)
+  return b or "tether"
+end
 -- ---- fixture file --------------------------------------------------------------------------
 local dir = vim.fn.tempname()
 vim.fn.mkdir(dir, "p")
@@ -143,12 +147,60 @@ local tether = require("tether")
 -- ---- setup / config ------------------------------------------------------------------------
 print("# setup")
 tether.setup()
-eq("config read once via `tether config show --json`", calls[1], { "tether", "config", "show", "--json" })
-eq("exactly one config shell-out", #calls, 1)
-check("normal-mode mapping from config", vim.fn.maparg(" ac", "n") ~= "")
-check("visual-mode mapping from config", vim.fn.maparg(" ac", "x") ~= "")
+-- keys are mapped at once from the Lua defaults; nothing waited for the CLI
+check("normal-mode mapping from defaults, immediately", vim.fn.maparg(" ac", "n") ~= "")
+check("visual-mode mapping from defaults, immediately", vim.fn.maparg(" ac", "x") ~= "")
 check("picker mapping", vim.fn.maparg(" aC", "n") ~= "")
+settle()
+eq("config read in the background via `tether config show --json`", calls[1], { "tether", "config", "show", "--json" })
+eq("exactly one config shell-out", #calls, 1)
 check("highlight groups defined", vim.fn.hlexists("TetherFloat") == 1 and vim.fn.hlexists("TetherFloatBorder") == 1 and vim.fn.hlexists("TetherFloatTitle") == 1)
+
+print("# config keys arrive asynchronously")
+reset()
+require("tether.config").reset_cache()
+cfg_json = vim.json.encode({ keys = { comment = "<leader>qq", comment_pick = "<leader>qQ" } })
+tether.setup()
+check("defaults mapped before the config arrives", vim.fn.maparg(" ac", "n") ~= "" and vim.fn.maparg(" qq", "n") == "")
+settle()
+check("keys from the tether config remap when it arrives", vim.fn.maparg(" qq", "n") ~= "" and vim.fn.maparg(" qQ", "x") ~= "")
+eq("old default mappings removed on remap", vim.fn.maparg(" ac", "n"), "")
+cfg_json = vim.json.encode({ keys = { comment = "<leader>ac", comment_pick = "<leader>aC" } })
+require("tether.config").reset_cache()
+tether.setup()
+settle()
+check("back to the defaults", vim.fn.maparg(" ac", "n") ~= "" and vim.fn.maparg(" qq", "n") == "")
+
+print("# outside Herdr nothing is spawned at startup")
+reset()
+vim.env.HERDR_ENV = nil
+require("tether.config").reset_cache()
+tether.setup()
+settle()
+eq("no shell-out outside Herdr", #calls, 0)
+check("defaults still mapped outside Herdr", vim.fn.maparg(" ac", "n") ~= "")
+vim.env.HERDR_ENV = "1"
+require("tether.config").reset_cache()
+tether.setup()
+settle()
+
+print("# binary lookup")
+do
+  local cfg = require("tether.config")
+  local real_find = cfg.find_bin
+  -- (the stub above replaced find_bin; the original is the module's own function, re-require it)
+  package.loaded["tether.config"] = nil
+  local fresh = require("tether.config")
+  eq("bin option wins", fresh.find_bin("/x/mytether", { exepath = function() return "/usr/bin/tether" end }), "/x/mytether")
+  eq("PATH next", fresh.find_bin(nil, { exepath = function() return "/usr/bin/tether" end }), "/usr/bin/tether")
+  local seen = {}
+  local function none(_) return "" end
+  eq("release build next to the plugin", fresh.find_bin(nil, { exepath = none, root = "/r/nvim", is_exec = function(p) table.insert(seen, p) return p:find("release", 1, true) ~= nil end }):gsub("^/r/nvim/%.%./", ""), "target/release/tether")
+  eq("debug build last", (fresh.find_bin(nil, { exepath = none, root = "/r/nvim", is_exec = function(p) return p:find("debug", 1, true) ~= nil end }):gsub("^/r/nvim/%.%./", "")), "target/debug/tether")
+  eq("nothing found: plain tether", fresh.find_bin(nil, { exepath = none, root = "/r/nvim", is_exec = function() return false end }), "tether")
+  package.loaded["tether.config"] = cfg
+  cfg.find_bin = real_find
+end
 
 -- ---- normal mode: open float, type, send ----------------------------------------------------
 print("# normal mode send")
@@ -274,6 +326,35 @@ settle()
 last = notes[#notes]
 check("failure is reported as an error with tether's stderr", last ~= nil and last.level == vim.log.levels.ERROR and last.msg:find("agent_blocked", 1, true) ~= nil and last.msg:find("exit 6", 1, true) ~= nil, vim.inspect(notes))
 eq("float closed on failure too", #floats(), 0)
+eq("the comment text is saved in register t", vim.fn.getreg("t"), "hi")
+check("error says where the text went", last.msg:find("register t", 1, true) ~= nil, last.msg)
+
+reset()
+send_result = { code = 124, stdout = "", stderr = "" }
+feed("<leader>ac")
+settle()
+feed("slow one<CR>")
+settle()
+last = notes[#notes]
+check("exit 124 is a timeout, not an unknown error", last ~= nil and last.msg:find("timed out", 1, true) ~= nil and last.msg:find("unknown", 1, true) == nil, vim.inspect(notes))
+eq("timeout keeps the text in register t", vim.fn.getreg("t"), "slow one")
+reset()
+send_result = { code = 1, stdout = "", stderr = "  \n" }
+feed("<leader>ac")
+settle()
+feed("silent one<CR>")
+settle()
+last = notes[#notes]
+check("empty stderr is reported as no output", last ~= nil and last.msg:find("no output", 1, true) ~= nil and last.msg:find("unknown", 1, true) == nil, vim.inspect(notes))
+eq("no-output failure keeps the text in register t", vim.fn.getreg("t"), "silent one")
+reset()
+send_result = { code = 0, stdout = "sent to claude · tab 1 (w1:p2, idle)\n", stderr = "" }
+vim.fn.setreg("t", "untouched")
+feed("<leader>ac")
+settle()
+feed("fine<CR>")
+settle()
+eq("register t is left alone on success", vim.fn.getreg("t"), "untouched")
 
 reset()
 send_result = { code = 0, stdout = "sent to claude · tab 1 (w1:p2, working)\n", stderr = "tether: warning: agent is blocked\n" }
@@ -283,6 +364,38 @@ feed("hi<CR>")
 settle()
 last = notes[#notes]
 check("warnings surface as WARN", last ~= nil and last.level == vim.log.levels.WARN and last.msg:find("blocked", 1, true) ~= nil, vim.inspect(notes))
+
+-- ---- completion / AI suggestions off, Enter survives other plugins ------------------------------
+print("# input buffer hygiene")
+reset()
+local cmp_opts
+package.loaded.cmp = { setup = { buffer = function(o) cmp_opts = o end } }
+local grp = vim.api.nvim_create_augroup("FakeAutopairs", { clear = true })
+-- a global insert-mode <CR> map plus a plugin that grabs <CR> buffer-locally on InsertEnter
+local global_cr = 0
+vim.keymap.set("i", "<CR>", function() global_cr = global_cr + 1 end, {})
+vim.api.nvim_create_autocmd("InsertEnter", { group = grp, callback = function(a)
+  vim.keymap.set("i", "<CR>", function() global_cr = global_cr + 1 end, { buffer = a.buf })
+end })
+vim.api.nvim_win_set_cursor(0, { 3, 0 })
+feed("<leader>ac")
+settle()
+fl = floats()
+eq("float open", #fl, 1)
+local ibuf = fl[1] and vim.api.nvim_win_get_buf(fl[1].win) or -1
+eq("filetype is tetherinput", vim.bo[ibuf].filetype, "tetherinput")
+eq("blink completion off", vim.b[ibuf].completion, false)
+eq("copilot disabled", vim.b[ibuf].copilot_enabled, false)
+eq("copilot auto trigger off", vim.b[ibuf].copilot_suggestion_auto_trigger, false)
+eq("cmp disabled for the buffer", cmp_opts, { enabled = false })
+feed("hello enter<CR>")
+settle()
+eq("Enter still sends despite global + InsertEnter <CR> maps", #sends(), 1)
+eq("the other plugins' <CR> maps never ran", global_cr, 0)
+eq("sent text", sends()[1] and sends()[1][8], "hello enter")
+vim.api.nvim_del_augroup_by_id(grp)
+pcall(vim.keymap.del, "i", "<CR>")
+package.loaded.cmp = nil
 
 -- ---- picker ------------------------------------------------------------------------------------
 print("# picker")
@@ -356,6 +469,8 @@ tether.setup({ keys = { comment = "<leader>zz", comment_pick = false } })
 check("opts override tether config keys", vim.fn.maparg(" zz", "n") ~= "")
 eq("old mapping removed on re-setup", vim.fn.maparg(" ac", "n"), "")
 eq("picker mapping can be disabled", vim.fn.maparg(" aC", "n"), "")
+settle()
+check("opts still win after the config arrives", vim.fn.maparg(" zz", "n") ~= "" and vim.fn.maparg(" ac", "n") == "" and vim.fn.maparg(" aC", "n") == "")
 tether.setup({ read_config = false })
 check("read_config=false keeps defaults without shelling out", vim.fn.maparg(" ac", "n") ~= "" and #calls == 1)
 

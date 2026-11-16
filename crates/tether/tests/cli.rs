@@ -80,9 +80,54 @@ fn agents_json_lists_workspace_agents_with_primary() {
     assert_eq!(rows[0]["is_primary"], true);
     assert_eq!(rows[1]["is_primary"], false);
     assert_eq!(rows[1]["tab_label"], "tests");
-    // primary was persisted
+    // `agents` is read-only: it must not write the primary tag
+    assert!(!env.dir.path().join("state.json").exists());
+    // sending tags the primary on first sight
+    let o = run(env.cmd(Some(&h)).args(["send", "--ref", "x.txt:1", "--text", "hi"]));
+    assert!(o.status.success(), "{}", stderr(&o));
     let st: Value = serde_json::from_str(&std::fs::read_to_string(env.dir.path().join("state.json")).unwrap()).unwrap();
     assert_eq!(st["workspaces"]["w1"]["primary_pane"], "w1:p2");
+}
+
+#[test]
+fn slash_body_is_fine_with_the_default_template_but_refused_when_text_comes_first() {
+    let env = Env::new();
+    let h = fake(prompt_ok());
+    let o = run(env.cmd(Some(&h)).args(["send", "--ref", "a.rs:3", "--text", "/clear the cache?"]));
+    assert!(o.status.success(), "{}", stderr(&o));
+    let text = h.requests_for("agent.prompt")[0].params["text"].as_str().unwrap().to_string();
+    assert!(text.starts_with("[comment] ") && text.ends_with("/clear the cache?"), "{text}");
+    // a template that begins with {text} brings the body check back
+    std::fs::write(env.dir.path().join("config.toml"), "[comment]\ntemplate = \"{text} ({path}:{line})\"\n").unwrap();
+    let before = h.requests().len();
+    let o = run(env.cmd(Some(&h)).args(["send", "--ref", "a.rs:3", "--text", "  /compact"]));
+    assert_eq!(o.status.code(), Some(2), "{}", stderr(&o));
+    assert_eq!(h.requests().len(), before, "nothing sent");
+}
+
+#[test]
+fn foreign_pane_is_refused_unless_workspace_matches_or_allow_foreign() {
+    let env = Env::new();
+    let h = FakeHerdr::start(|method, params| match method {
+        "agent.list" => Ok(json!({"type":"agent_list","agents":[
+            {"pane_id":"w1:p2","workspace_id":"w1","tab_id":"w1:t1","agent":"claude","agent_status":"idle"}]})),
+        "tab.list" => Ok(json!({"type":"tab_list","tabs":[{"tab_id":"w1:t1","workspace_id":"w1","number":1,"label":"1"}]})),
+        "agent.get" => Ok(json!({"type":"agent_info","agent":{"pane_id":params["target"],"workspace_id":"w2","tab_id":"w2:t1","agent":"claude","agent_status":"idle"}})),
+        "agent.prompt" => prompt_ok(),
+        _ => Err(("invalid_request".into(), "?".into())),
+    });
+    let base = ["send", "--to", "w2:p1", "--ref", "x.txt:1", "--text", "hi"];
+    let o = run(env.cmd(Some(&h)).args(base));
+    assert_eq!(o.status.code(), Some(6), "{}", stderr(&o));
+    assert!(stderr(&o).contains("--workspace w2"), "{}", stderr(&o));
+    assert!(h.requests_for("agent.prompt").is_empty());
+    let o = run(env.cmd(Some(&h)).args(base).args(["--workspace", "w3"]));
+    assert_eq!(o.status.code(), Some(6));
+    let o = run(env.cmd(Some(&h)).args(base).args(["--workspace", "w2"]));
+    assert!(o.status.success(), "{}", stderr(&o));
+    let o = run(env.cmd(Some(&h)).args(base).arg("--allow-foreign"));
+    assert!(o.status.success(), "{}", stderr(&o));
+    assert_eq!(h.requests_for("agent.prompt").len(), 2);
 }
 
 #[test]
@@ -168,8 +213,6 @@ fn bad_input_exits_2_and_never_touches_herdr() {
         vec!["send", "--ref", "no-colon", "--text", "hi"],
         vec!["send", "--ref", "a.rs:0", "--text", "hi"],
         vec!["send", "--ref", "a.rs:3", "--text", "   "],
-        vec!["send", "--ref", "a.rs:3", "--text", "/clear"],
-        vec!["send", "--ref", "a.rs:3", "--text", "  /compact"],
         vec!["send", "--diagram", "d1", "--node", "n1", "--text", "hi"],
     ] {
         let o = run(env.cmd(Some(&h)).args(&args));

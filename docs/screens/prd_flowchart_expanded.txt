@@ -1,0 +1,19 @@
+ ◈ Session refresh  flowchart · 3 nodes · 2 edges                              node: Token expired?
+
+                 ┏━━━━━━━━━━━━━━━━━━━━━━━┓ ╭──────────────────────────────────────╮
+                 ┃ ◆ Token expired? § +1 ┃ │ EDGE CASE                            │
+                 ┗━━━━━━━━━━━━━━━━━━━━━━━┛ │ Uses client clock; skew > 30s causes │
+                       │yes        │no     │ early refresh                        │
+                       │           │       │ CODE                                 │
+                       │           │       │ src/auth/session.ts:142              │
+                       │           │       ╰──────────────────────────────────────╯
+                       │           │
+                       ╰──────────╮│
+                                  │╰────────────────────────────╮
+                                  ▼                             ▼
+                     ╭─────────────────────────╮      ╭────────────────────╮
+                     │ ▪ Call /token/refresh § │      │ ▪ Continue request │
+                     ╰─────────────────────────╯      ╰────────────────────╯
+
+
+ hjkl move · ⏎ code · tab details · ␣ac ask · / search · ? help · q quit

@@ -2,6 +2,7 @@
 //! the on-disk store and anchor re-resolution (PRD Feature 3).
 
 pub mod anchor;
+pub mod element;
 pub mod mermaid;
 pub mod schema;
 pub mod spec;
@@ -9,6 +10,7 @@ pub mod store;
 pub mod validate;
 
 pub use anchor::{resolve, resolve_with_window, Resolved, DEFAULT_WINDOW};
+pub use element::{elements, find_element, Element, ElementKind};
 pub use mermaid::to_mermaid;
 pub use spec::*;
 pub use store::{DiagramInfo, DiagramStore, StoreError};

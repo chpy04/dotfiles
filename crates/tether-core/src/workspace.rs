@@ -1,8 +1,10 @@
 //! Current-workspace context, the agent listing, and primary-agent tagging.
 //!
 //! Primary agent (PRD "Implementation defaults"): the first agent tether sees in a workspace is
-//! tagged and persisted in a state file (Herdr has no storage API). If the tagged pane is gone,
-//! fall back to the agent in the first tab (lowest tab number), then retag.
+//! tagged and persisted in a state file (Herdr has no storage API). The tag moves only when the
+//! tagged pane is gone from the workspace (or nothing is tagged): then the first `claude` agent in
+//! tab order (any agent if there is no claude) is chosen. A pane that merely has no agent entry for
+//! a moment keeps its tag, and the fallback used meanwhile is not persisted.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -75,14 +77,29 @@ pub struct OwnedTab {
     pub created_at: u64,
 }
 
-/// `$TETHER_STATE`, else `<runtime>/tether/state.json`.
+/// `$TETHER_STATE`, else `$XDG_STATE_HOME/tether/state.json`, else `~/.local/state/tether/state.json`.
+/// (Sockets stay in the runtime dir; state must survive `$TMPDIR` purges.)
 pub fn state_path() -> PathBuf {
-    if let Some(p) = std::env::var_os("TETHER_STATE") {
-        if !p.is_empty() {
-            return PathBuf::from(p);
-        }
+    state_path_from(|k| std::env::var_os(k))
+}
+
+pub fn state_path_from(get: impl Fn(&str) -> Option<std::ffi::OsString>) -> PathBuf {
+    let nonempty = |k: &str| get(k).filter(|v| !v.is_empty());
+    if let Some(p) = nonempty("TETHER_STATE") {
+        return PathBuf::from(p);
     }
-    crate::nvim::socket_dir().join("state.json")
+    let base = match nonempty("XDG_STATE_HOME") {
+        Some(x) => PathBuf::from(x),
+        None => PathBuf::from(nonempty("HOME").unwrap_or_else(|| "/tmp".into())).join(".local/state"),
+    };
+    base.join("tether").join("state.json")
+}
+
+/// Records younger than this are never pruned: the tab list they are compared with may predate them.
+const PRUNE_GRACE_SECS: u64 = 10;
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 
 #[derive(Debug, Clone)]
@@ -103,9 +120,44 @@ impl StateStore {
         &self.path
     }
 
+    /// Read the state. A missing file is "nothing recorded"; a corrupt one is backed up to
+    /// `<name>.corrupt-<ts>` and reported on stderr (never silently dropped).
     fn load(&self) -> StateFile {
-        // A missing or corrupt state file just means "nothing tagged yet".
-        std::fs::read_to_string(&self.path).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
+        let Ok(body) = std::fs::read_to_string(&self.path) else { return StateFile::default() };
+        match serde_json::from_str(&body) {
+            Ok(st) => st,
+            Err(e) => {
+                let mut name = self.path.file_name().map(|n| n.to_os_string()).unwrap_or_default();
+                name.push(format!(".corrupt-{}", now_secs()));
+                let backup = self.path.with_file_name(name);
+                let saved = std::fs::copy(&self.path, &backup).is_ok();
+                eprintln!(
+                    "tether: warning: state file {} is corrupt ({e}); {} and starting empty",
+                    self.path.display(),
+                    if saved { format!("backed it up to {}", backup.display()) } else { "could not back it up".to_string() }
+                );
+                StateFile::default()
+            }
+        }
+    }
+
+    /// Exclusive advisory lock on the sidecar `<state>.lock`, held until the guard drops.
+    fn lock(&self) -> Result<std::fs::File> {
+        if let Some(dir) = self.path.parent() {
+            std::fs::create_dir_all(dir)
+                .map_err(|e| TetherError::Other(format!("cannot create {}: {e}", dir.display())))?;
+        }
+        let mut name = self.path.file_name().map(|n| n.to_os_string()).unwrap_or_default();
+        name.push(".lock");
+        let lock_path = self.path.with_file_name(name);
+        let f = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(&lock_path)
+            .map_err(|e| TetherError::Other(format!("cannot open {}: {e}", lock_path.display())))?;
+        f.lock().map_err(|e| TetherError::Other(format!("cannot lock {}: {e}", lock_path.display())))?;
+        Ok(f)
     }
 
     pub fn primary_pane(&self, workspace_id: &str) -> Option<String> {
@@ -127,10 +179,10 @@ impl StateStore {
 
     /// Record a tab tether just created (replaces a stale record with the same id).
     pub fn add_owned_tab(&self, workspace_id: &str, tab_id: &str, label: &str) -> Result<()> {
-        let created_at = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
+        self.add_owned_tab_at(workspace_id, tab_id, label, now_secs())
+    }
+
+    pub(crate) fn add_owned_tab_at(&self, workspace_id: &str, tab_id: &str, label: &str, created_at: u64) -> Result<()> {
         self.update(|st| {
             let w = st.workspaces.entry(workspace_id.to_string()).or_default();
             w.tabs.retain(|t| t.tab_id != tab_id);
@@ -155,26 +207,30 @@ impl StateStore {
     }
 
     /// Drop records of tabs that no longer exist (`live` = current tab ids of the workspace), so a
-    /// reused tab id can never inherit "tether made this". Writes only when something changed.
+    /// reused tab id can never inherit "tether made this". A record is dropped only when its tab id
+    /// is absent from `live` **and** it is older than ~10 s (a tab created after `live` was fetched
+    /// must survive); the check is repeated inside the state lock. Writes only when something changed.
     pub fn prune_owned_tabs(&self, workspace_id: &str, live: &[String]) -> Result<()> {
-        let stale = self.owned_tabs(workspace_id).iter().any(|t| !live.contains(&t.tab_id));
-        if !stale {
+        self.prune_owned_tabs_at(workspace_id, live, now_secs())
+    }
+
+    fn prune_owned_tabs_at(&self, workspace_id: &str, live: &[String], now: u64) -> Result<()> {
+        let prunable = |t: &OwnedTab| !live.contains(&t.tab_id) && now.saturating_sub(t.created_at) > PRUNE_GRACE_SECS;
+        if !self.owned_tabs(workspace_id).iter().any(prunable) {
             return Ok(());
         }
         self.update(|st| {
             if let Some(w) = st.workspaces.get_mut(workspace_id) {
-                w.tabs.retain(|t| live.contains(&t.tab_id));
+                w.tabs.retain(|t| !prunable(t));
             }
         })
     }
 
+    /// Locked read-modify-write: concurrent tether processes cannot lose each other's records.
     fn update(&self, f: impl FnOnce(&mut StateFile)) -> Result<()> {
+        let _guard = self.lock()?;
         let mut st = self.load();
         f(&mut st);
-        if let Some(dir) = self.path.parent() {
-            std::fs::create_dir_all(dir)
-                .map_err(|e| TetherError::Other(format!("cannot create {}: {e}", dir.display())))?;
-        }
         let tmp = self.path.with_extension(format!("tmp{}", std::process::id()));
         let body = serde_json::to_string_pretty(&st).map_err(|e| TetherError::Other(e.to_string()))?;
         std::fs::write(&tmp, body).map_err(|e| TetherError::Other(format!("cannot write {}: {e}", tmp.display())))?;
@@ -212,19 +268,31 @@ impl AgentRow {
     }
 }
 
-/// Pure primary selection. `rows` must be in tab order. Returns the index of the primary:
-/// the tagged pane if it is still an agent, else the first agent in tab order.
-pub fn pick_primary(rows: &[AgentRow], tagged: Option<&str>) -> Option<usize> {
+/// Outcome of primary selection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Pick {
+    /// Index into `rows` of the primary.
+    pub index: usize,
+    /// Whether the choice should be written as the new tag.
+    pub persist: bool,
+}
+
+/// Pure primary selection. `rows` must be in tab order. `tagged_pane_exists` says whether the
+/// tagged pane is still a pane of the workspace (agent or not).
+/// * the tagged pane has an agent row: it is the primary, nothing to write;
+/// * the tagged pane exists but has no agent right now (Herdr hiccup): keep the tag; use the
+///   fallback for this call only (`persist = false`);
+/// * the tagged pane is gone, or nothing is tagged: fallback, persisted.
+///
+/// Fallback = first `claude` agent in tab order, else the first agent.
+pub fn pick_primary(rows: &[AgentRow], tagged: Option<&str>, tagged_pane_exists: bool) -> Option<Pick> {
     if let Some(t) = tagged {
         if let Some(i) = rows.iter().position(|r| r.pane_id == t) {
-            return Some(i);
+            return Some(Pick { index: i, persist: false });
         }
     }
-    if rows.is_empty() {
-        None
-    } else {
-        Some(0)
-    }
+    let index = rows.iter().position(|r| r.kind == "claude").or(if rows.is_empty() { None } else { Some(0) })?;
+    Some(Pick { index, persist: !(tagged.is_some() && tagged_pane_exists) })
 }
 
 /// Build rows from raw Herdr data (no primary flags yet), ordered by tab index.
@@ -251,36 +319,80 @@ pub fn build_rows(agents: &[Agent], tabs: &[crate::herdr::Tab], workspace_id: &s
             )
         })
         .collect();
-    rows.sort_by_key(|(i, r)| (r.tab_index, *i));
+    // tab numbers are 1-based; 0 means "tab unknown" and sorts last
+    rows.sort_by_key(|(i, r)| (if r.tab_index == 0 { u32::MAX } else { r.tab_index }, *i));
     rows.into_iter().map(|(_, r)| r).collect()
 }
 
-/// Apply primary tagging: reads the tag, picks, flags the row, and persists a changed tag.
-pub fn apply_primary(rows: &mut [AgentRow], workspace_id: &str, store: &StateStore) -> Result<()> {
+/// Apply primary tagging: reads the tag, picks, flags the row. With `persist_tag` a changed tag is
+/// written; read-only callers (`agents`, `layout`) pass `false` and never write.
+/// `pane_ids` are all panes of the workspace (agent or not); `None` = unknown, which counts as
+/// "the tagged pane still exists" so nothing is retagged on a guess.
+pub fn apply_primary(
+    rows: &mut [AgentRow],
+    workspace_id: &str,
+    store: &StateStore,
+    pane_ids: Option<&[String]>,
+    persist_tag: bool,
+) -> Result<()> {
     let tagged = store.primary_pane(workspace_id);
-    if let Some(i) = pick_primary(rows, tagged.as_deref()) {
-        rows[i].is_primary = true;
-        if tagged.as_deref() != Some(rows[i].pane_id.as_str()) {
-            store.set_primary_pane(workspace_id, &rows[i].pane_id)?;
+    let exists = tagged.as_deref().is_some_and(|t| pane_ids.is_none_or(|ids| ids.iter().any(|p| p == t)));
+    if let Some(pick) = pick_primary(rows, tagged.as_deref(), exists) {
+        rows[pick.index].is_primary = true;
+        if persist_tag && pick.persist && tagged.as_deref() != Some(rows[pick.index].pane_id.as_str()) {
+            store.set_primary_pane(workspace_id, &rows[pick.index].pane_id)?;
         }
     }
     Ok(())
 }
 
-/// Every agent in the context's workspace (tab order), with the primary flagged (and tagged on
-/// first sight).
+fn workspace_pane_ids(client: &Client, workspace_id: &str) -> Option<Vec<String>> {
+    client.pane_list(Some(workspace_id)).ok().map(|p| p.into_iter().map(|p| p.pane_id).collect())
+}
+
+/// Every agent in the context's workspace (tab order), with the primary flagged. Read-only: never
+/// writes the tag (sending does, see `resolve_target`).
 pub fn list_agents(client: &Client, ctx: &Context, store: &StateStore) -> Result<Vec<AgentRow>> {
+    list_agents_in(client, &ctx.workspace_id, store, false)
+}
+
+/// `list_agents` for a workspace id; `persist_tag` allows writing a changed primary tag.
+pub fn list_agents_in(client: &Client, workspace_id: &str, store: &StateStore, persist_tag: bool) -> Result<Vec<AgentRow>> {
     let agents = client.agent_list()?;
-    let tabs = client.tab_list(Some(&ctx.workspace_id))?;
-    let mut rows = build_rows(&agents, &tabs, &ctx.workspace_id);
-    apply_primary(&mut rows, &ctx.workspace_id, store)?;
+    let tabs = client.tab_list(Some(workspace_id))?;
+    let mut rows = build_rows(&agents, &tabs, workspace_id);
+    let panes = workspace_pane_ids(client, workspace_id);
+    apply_primary(&mut rows, workspace_id, store, panes.as_deref(), persist_tag)?;
     Ok(rows)
 }
 
 /// Resolve `--to`: `primary`, a pane id (`w8:p2`), or an agent name (also: a unique agent kind).
+/// A pane id outside the current workspace is refused (see `resolve_target_opts`).
 pub fn resolve_target(client: &Client, ctx: &Context, store: &StateStore, to: &str) -> Result<AgentRow> {
-    let rows = list_agents(client, ctx, store)?;
-    resolve_in_rows(client, ctx, &rows, to)
+    resolve_target_opts(client, ctx, store, to, None, false)
+}
+
+/// `resolve_target` with the foreign-pane policy: an explicit pane id that belongs to another
+/// workspace is refused (`TetherError::Refused`, exit 6) unless `workspace` (`--workspace <id>`)
+/// names that workspace or `allow_foreign` (`--allow-foreign`) is set.
+pub fn resolve_target_opts(
+    client: &Client,
+    ctx: &Context,
+    store: &StateStore,
+    to: &str,
+    workspace: Option<&str>,
+    allow_foreign: bool,
+) -> Result<AgentRow> {
+    let rows = list_agents_in(client, &ctx.workspace_id, store, true)?;
+    let row = resolve_in_rows(client, ctx, &rows, to)?;
+    if row.workspace_id != ctx.workspace_id && !allow_foreign && workspace != Some(row.workspace_id.as_str()) {
+        return Err(TetherError::Refused(format!(
+            "pane {} belongs to workspace {}, but tether is scoped to workspace {}; pass --workspace {} \
+             (or --allow-foreign) to send there deliberately",
+            row.pane_id, row.workspace_id, ctx.workspace_id, row.workspace_id
+        )));
+    }
+    Ok(row)
 }
 
 fn resolve_in_rows(client: &Client, ctx: &Context, rows: &[AgentRow], to: &str) -> Result<AgentRow> {
@@ -362,13 +474,79 @@ mod tests {
         assert_eq!(ok, Context { workspace_id: "w3".into(), tab_id: None, pane_id: Some("w3:p1".into()) });
     }
 
+    fn panes(ids: &[&str]) -> Vec<String> {
+        ids.iter().map(|s| s.to_string()).collect()
+    }
+
     #[test]
     fn pick_primary_rules() {
         let rows = vec![row(1, "w1:p1", "claude"), row(3, "w1:p5", "codex")];
-        assert_eq!(pick_primary(&rows, None), Some(0)); // first seen = tab order
-        assert_eq!(pick_primary(&rows, Some("w1:p5")), Some(1)); // tag wins, even if not tab 1
-        assert_eq!(pick_primary(&rows, Some("w1:gone")), Some(0)); // tagged pane vanished -> first tab
-        assert_eq!(pick_primary(&[], Some("w1:p1")), None);
+        let pick = |t: Option<&str>, exists: bool| pick_primary(&rows, t, exists);
+        assert_eq!(pick(None, false), Some(Pick { index: 0, persist: true })); // first seen = tab order
+        assert_eq!(pick(Some("w1:p5"), true), Some(Pick { index: 1, persist: false })); // tag wins, nothing to write
+        assert_eq!(pick(Some("w1:gone"), false), Some(Pick { index: 0, persist: true })); // pane vanished -> retag
+        assert_eq!(pick_primary(&[], Some("w1:p1"), true), None);
+    }
+
+    #[test]
+    fn pane_without_agent_entry_keeps_its_tag_and_fallback_is_not_persisted() {
+        // tagged pane exists in the workspace but is momentarily missing from agent.list
+        let rows = vec![row(1, "w1:p2", "claude"), row(2, "w1:p3", "claude")];
+        assert_eq!(pick_primary(&rows, Some("w1:p1"), true), Some(Pick { index: 0, persist: false }));
+        let d = tempfile::tempdir().unwrap();
+        let store = StateStore::new(d.path().join("state.json"));
+        store.set_primary_pane("w1", "w1:p1").unwrap();
+        let mut r = rows.clone();
+        apply_primary(&mut r, "w1", &store, Some(&panes(&["w1:p1", "w1:p2", "w1:p3"])), true).unwrap();
+        assert!(r[0].is_primary, "fallback used for this call");
+        assert_eq!(store.primary_pane("w1").as_deref(), Some("w1:p1"), "tag kept");
+        // pane list unknown: also never retag on a guess
+        let mut r = rows.clone();
+        apply_primary(&mut r, "w1", &store, None, true).unwrap();
+        assert_eq!(store.primary_pane("w1").as_deref(), Some("w1:p1"));
+        // once the pane is really gone, the tag moves
+        let mut r = rows.clone();
+        apply_primary(&mut r, "w1", &store, Some(&panes(&["w1:p2", "w1:p3"])), true).unwrap();
+        assert_eq!(store.primary_pane("w1").as_deref(), Some("w1:p2"));
+    }
+
+    #[test]
+    fn read_only_callers_never_write_a_tag() {
+        let d = tempfile::tempdir().unwrap();
+        let store = StateStore::new(d.path().join("state.json"));
+        let mut r = vec![row(1, "w1:p2", "claude")];
+        apply_primary(&mut r, "w1", &store, Some(&panes(&["w1:p2"])), false).unwrap();
+        assert!(r[0].is_primary);
+        assert_eq!(store.primary_pane("w1"), None);
+        assert!(!store.path().exists(), "no state file written");
+        // ...but a tagged pane that is gone is not rewritten either
+        store.set_primary_pane("w1", "w1:old").unwrap();
+        apply_primary(&mut r, "w1", &store, Some(&panes(&["w1:p2"])), false).unwrap();
+        assert_eq!(store.primary_pane("w1").as_deref(), Some("w1:old"));
+    }
+
+    #[test]
+    fn fallback_prefers_claude_and_unknown_tabs_sort_last() {
+        let rows = vec![row(1, "w1:p1", "codex"), row(2, "w1:p2", "claude"), row(3, "w1:p3", "claude")];
+        assert_eq!(pick_primary(&rows, None, false).unwrap().index, 1);
+        let no_claude = vec![row(1, "w1:p1", "codex"), row(2, "w1:p2", "gemini")];
+        assert_eq!(pick_primary(&no_claude, None, false).unwrap().index, 0);
+        // build_rows: an agent whose tab is not in the tab list (tab_index 0) goes last
+        let ag = |pane: &str, tab: &str| Agent {
+            pane_id: pane.into(),
+            workspace_id: "w1".into(),
+            tab_id: tab.into(),
+            agent: "claude".into(),
+            agent_status: "idle".into(),
+            ..Default::default()
+        };
+        let tabs = vec![
+            crate::herdr::Tab { tab_id: "w1:t1".into(), workspace_id: "w1".into(), number: 1, label: "1".into(), ..Default::default() },
+            crate::herdr::Tab { tab_id: "w1:t2".into(), workspace_id: "w1".into(), number: 2, label: "2".into(), ..Default::default() },
+        ];
+        let rows = build_rows(&[ag("w1:pX", "w1:tunknown"), ag("w1:p2", "w1:t2"), ag("w1:p1", "w1:t1")], &tabs, "w1");
+        assert_eq!(rows.iter().map(|r| r.pane_id.as_str()).collect::<Vec<_>>(), ["w1:p1", "w1:p2", "w1:pX"]);
+        assert_eq!(pick_primary(&rows, None, false).unwrap().index, 0);
     }
 
     #[test]
@@ -377,28 +555,28 @@ mod tests {
         let store = StateStore::new(d.path().join("t/state.json"));
         // first sight: tab 1 agent is tagged
         let mut rows = vec![row(1, "w1:p1", "claude"), row(2, "w1:p2", "claude")];
-        apply_primary(&mut rows, "w1", &store).unwrap();
+        apply_primary(&mut rows, "w1", &store, Some(&panes(&["w1:p1", "w1:p2"])), true).unwrap();
         assert!(rows[0].is_primary && !rows[1].is_primary);
         assert_eq!(store.primary_pane("w1").as_deref(), Some("w1:p1"));
         // tabs reordered: tag sticks to pane p1 although it is now tab 2
         let mut rows = vec![row(1, "w1:p2", "claude"), row(2, "w1:p1", "claude")];
-        apply_primary(&mut rows, "w1", &store).unwrap();
+        apply_primary(&mut rows, "w1", &store, Some(&panes(&["w1:p1", "w1:p2"])), true).unwrap();
         assert!(rows[1].is_primary && !rows[0].is_primary);
         assert_eq!(store.primary_pane("w1").as_deref(), Some("w1:p1"));
-        // p1 closes: fall back to tab 1's agent and retag
+        // p1 closes: fall back to the first claude in tab order and retag
         let mut rows = vec![row(1, "w1:p2", "claude"), row(4, "w1:p9", "codex")];
-        apply_primary(&mut rows, "w1", &store).unwrap();
+        apply_primary(&mut rows, "w1", &store, Some(&panes(&["w1:p2", "w1:p9"])), true).unwrap();
         assert!(rows[0].is_primary);
         assert_eq!(store.primary_pane("w1").as_deref(), Some("w1:p2"));
         // other workspaces are independent; no agents -> no tag change
         assert_eq!(store.primary_pane("w2"), None);
         let mut none: Vec<AgentRow> = vec![];
-        apply_primary(&mut none, "w1", &store).unwrap();
+        apply_primary(&mut none, "w1", &store, Some(&[]), true).unwrap();
         assert_eq!(store.primary_pane("w1").as_deref(), Some("w1:p2"));
     }
 
     #[test]
-    fn corrupt_state_file_is_ignored() {
+    fn corrupt_state_file_is_backed_up_not_dropped() {
         let d = tempfile::tempdir().unwrap();
         let p = d.path().join("state.json");
         std::fs::write(&p, "{ not json").unwrap();
@@ -406,6 +584,72 @@ mod tests {
         assert_eq!(store.primary_pane("w1"), None);
         store.set_primary_pane("w1", "w1:p1").unwrap();
         assert_eq!(store.primary_pane("w1").as_deref(), Some("w1:p1"));
+        let backups: Vec<_> = std::fs::read_dir(d.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().starts_with("state.json.corrupt-"))
+            .collect();
+        assert!(!backups.is_empty(), "corrupt file kept as state.json.corrupt-<ts>");
+        assert_eq!(std::fs::read_to_string(backups[0].path()).unwrap(), "{ not json");
+    }
+
+    #[test]
+    fn state_path_locations() {
+        use std::ffi::OsString;
+        let env = |pairs: &'static [(&'static str, &'static str)]| {
+            move |k: &str| -> Option<OsString> { pairs.iter().find(|(n, _)| *n == k).map(|(_, v)| OsString::from(*v)) }
+        };
+        assert_eq!(state_path_from(env(&[("TETHER_STATE", "/x/s.json"), ("HOME", "/h")])), PathBuf::from("/x/s.json"));
+        assert_eq!(state_path_from(env(&[("XDG_STATE_HOME", "/xs"), ("HOME", "/h")])), PathBuf::from("/xs/tether/state.json"));
+        assert_eq!(state_path_from(env(&[("HOME", "/h")])), PathBuf::from("/h/.local/state/tether/state.json"));
+        assert_eq!(state_path_from(env(&[("XDG_STATE_HOME", ""), ("HOME", "/h")])), PathBuf::from("/h/.local/state/tether/state.json"));
+    }
+
+    #[test]
+    fn concurrent_updates_lose_no_records() {
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("s/state.json");
+        let threads: Vec<_> = (0..8)
+            .map(|t| {
+                let path = path.clone();
+                std::thread::spawn(move || {
+                    // each thread has its own store (own file handles), like separate processes
+                    let store = StateStore::new(path);
+                    for i in 0..10 {
+                        store.add_owned_tab("w1", &format!("w1:t{t}-{i}"), "x").unwrap();
+                    }
+                })
+            })
+            .collect();
+        for t in threads {
+            t.join().unwrap();
+        }
+        let store = StateStore::new(&path);
+        assert_eq!(store.owned_tabs("w1").len(), 80, "no lost records");
+    }
+
+    #[test]
+    fn prune_keeps_live_and_fresh_records_only_drops_old_absent_ones() {
+        let d = tempfile::tempdir().unwrap();
+        let store = StateStore::new(d.path().join("state.json"));
+        store.add_owned_tab("w1", "w1:t1", "live").unwrap();
+        store.add_owned_tab("w1", "w1:t2", "gone-but-fresh").unwrap();
+        let now = now_secs();
+        // pretend t3 and t1 are old
+        store
+            .update(|st| {
+                let w = st.workspaces.get_mut("w1").unwrap();
+                w.tabs.push(OwnedTab { tab_id: "w1:t3".into(), label: "gone-old".into(), created_at: now - 60 });
+                w.tabs.iter_mut().find(|t| t.tab_id == "w1:t1").unwrap().created_at = now - 60;
+            })
+            .unwrap();
+        let live = vec!["w1:t1".to_string()];
+        store.prune_owned_tabs("w1", &live).unwrap();
+        let ids: Vec<String> = store.owned_tabs("w1").into_iter().map(|t| t.tab_id).collect();
+        assert_eq!(ids, ["w1:t1", "w1:t2"], "live kept, absent+old dropped, absent+fresh (created after the tab list) kept");
+        // once the fresh one ages past the grace period it goes
+        store.prune_owned_tabs_at("w1", &live, now + 30).unwrap();
+        assert_eq!(store.owned_tabs("w1").len(), 1);
     }
 
     fn fake_workspace() -> FakeHerdr {
@@ -421,6 +665,10 @@ mod tests {
                     {"tab_id":"w1:t1","workspace_id":"w1","number":1,"label":"1"},
                     {"tab_id":"w1:t3","workspace_id":"w1","number":2,"label":"review"}]}))
             }
+            "pane.list" => Ok(json!({"type":"pane_list","panes":[
+                {"pane_id":"w1:p2","workspace_id":"w1","tab_id":"w1:t1"},
+                {"pane_id":"w1:p4","workspace_id":"w1","tab_id":"w1:t3"},
+                {"pane_id":"w1:p7","workspace_id":"w1","tab_id":"w1:t3"}]})),
             "agent.get" => match params["target"].as_str().unwrap() {
                 "w2:p1" => Ok(json!({"type":"agent_info","agent":{"pane_id":"w2:p1","workspace_id":"w2","tab_id":"w2:t1","agent":"claude","agent_status":"idle"}})),
                 _ => Err(("agent_not_found".into(), "no such agent".into())),
@@ -447,6 +695,9 @@ mod tests {
         assert_eq!(rows[1].tab_label, "review");
         assert_eq!(rows.iter().filter(|r| r.is_primary).count(), 1);
         assert_eq!(rows[0].display(), "tab 1 · claude — done");
+        assert_eq!(store.primary_pane("w1"), None, "`agents` is read-only: no tag written");
+        // sending (resolve_target) does tag on first sight
+        assert_eq!(resolve_target(&c, &ctx(), &store, "primary").unwrap().pane_id, "w1:p2");
         assert_eq!(store.primary_pane("w1").as_deref(), Some("w1:p2"));
     }
 
@@ -463,8 +714,14 @@ mod tests {
         // `claude` matches two agents in w1
         let e = resolve_target(&c, &ctx(), &store, "claude").unwrap_err();
         assert!(e.to_string().contains("matches 2 agents"), "{e}");
-        // explicit pane in another workspace is allowed (asks Herdr)
-        assert_eq!(resolve_target(&c, &ctx(), &store, "w2:p1").unwrap().workspace_id, "w2");
+        // explicit pane in another workspace: refused unless --workspace matches or --allow-foreign
+        let e = resolve_target(&c, &ctx(), &store, "w2:p1").unwrap_err();
+        assert!(matches!(e, TetherError::Refused(_)), "{e}");
+        assert_eq!(e.exit_code(), crate::error::exit::REFUSED);
+        assert!(e.to_string().contains("--workspace w2") && e.to_string().contains("--allow-foreign"), "{e}");
+        assert!(matches!(resolve_target_opts(&c, &ctx(), &store, "w2:p1", Some("w3"), false), Err(TetherError::Refused(_))));
+        assert_eq!(resolve_target_opts(&c, &ctx(), &store, "w2:p1", Some("w2"), false).unwrap().workspace_id, "w2");
+        assert_eq!(resolve_target_opts(&c, &ctx(), &store, "w2:p1", None, true).unwrap().workspace_id, "w2");
         // unknown
         assert!(matches!(resolve_target(&c, &ctx(), &store, "w1:p99").unwrap_err(), TetherError::Target(_)));
         assert!(matches!(resolve_target(&c, &ctx(), &store, "nobody").unwrap_err(), TetherError::Target(_)));
