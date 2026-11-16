@@ -11,11 +11,11 @@ pub struct CodeRef {
     #[schemars(length(min = 1))]
     pub path: String,
     /// 1-based line number.
-    #[schemars(range(min = 1))]
+    #[schemars(range(min = 1, max = 10_000_000))]
     pub line: u32,
     /// Optional 1-based last line of a range; must be >= `line`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schemars(range(min = 1))]
+    #[schemars(range(min = 1, max = 10_000_000))]
     pub end_line: Option<u32>,
     /// Optional snippet of the source line, used to re-find the line after the code shifts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -152,8 +152,8 @@ impl Flowchart {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Node {
-    /// Unique id within the diagram.
-    #[schemars(length(min = 1))]
+    /// Unique id within the diagram: letters, digits, `_`, `.` and `-` only.
+    #[schemars(length(min = 1), regex(pattern = r"^[A-Za-z0-9_.-]+$"))]
     pub id: String,
     /// Text shown in the node.
     #[schemars(length(min = 1))]
@@ -263,8 +263,9 @@ pub struct Sequence {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Participant {
-    /// Unique id within the diagram.
-    #[schemars(length(min = 1))]
+    /// Unique id within the diagram, shared with message and note ids: letters, digits, `_`, `.`
+    /// and `-` only.
+    #[schemars(length(min = 1), regex(pattern = r"^[A-Za-z0-9_.-]+$"))]
     pub id: String,
     /// Display name.
     #[schemars(length(min = 1))]
@@ -290,8 +291,10 @@ pub enum Item {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Message {
-    /// Stable id; assigned as `m1`, `m2`, ... at load time when omitted.
+    /// Stable id; assigned as `m1`, `m2`, ... at load time when omitted. Shares one namespace
+    /// with participant and note ids; letters, digits, `_`, `.` and `-` only.
     #[serde(default)]
+    #[schemars(regex(pattern = r"^[A-Za-z0-9_.-]+$"))]
     pub id: String,
     /// Sender participant id.
     pub from: String,
@@ -322,8 +325,10 @@ impl Message {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Note {
-    /// Stable id; assigned as `n1`, `n2`, ... at load time when omitted.
+    /// Stable id; assigned as `n1`, `n2`, ... at load time when omitted. Shares one namespace
+    /// with participant and message ids; letters, digits, `_`, `.` and `-` only.
     #[serde(default)]
+    #[schemars(regex(pattern = r"^[A-Za-z0-9_.-]+$"))]
     pub id: String,
     /// Participant ids the note spans (at least one).
     #[schemars(length(min = 1))]
@@ -383,9 +388,10 @@ impl Sequence {
     }
 
     /// Assign deterministic ids (`m1`.., `n1`..) to messages and notes lacking one,
-    /// in depth-first document order, skipping ids already in use.
+    /// in depth-first document order, skipping ids already in use (including participant ids).
     pub fn assign_ids(&mut self) {
-        let mut used = std::collections::HashSet::new();
+        let mut used: std::collections::HashSet<String> =
+            self.participants.iter().map(|p| p.id.clone()).collect();
         self.walk(&mut |it| match it {
             Item::Message(m) if !m.id.is_empty() => {
                 used.insert(m.id.clone());

@@ -400,3 +400,87 @@ fn item_schema_errors_are_specific() {
     .unwrap_err();
     assert!(has(&e, "/items/0/items/0/kind", "shout"), "{e:?}");
 }
+
+// ---------------------------------------------------------------- id namespace (review fix 1)
+
+fn seq_with(extra_items: &str, participants: &str) -> String {
+    format!(
+        r#"{{"type":"sequence","title":"t","participants":{participants},"items":[{extra_items}]}}"#
+    )
+}
+
+#[test]
+fn auto_ids_never_collide_with_participant_ids() {
+    let src = seq_with(
+        r#"{"type":"message","from":"m1","to":"n1","label":"hi"},{"type":"note","over":["m1"],"text":"x"}"#,
+        r#"[{"id":"m1","label":"M"},{"id":"n1","label":"N"}]"#,
+    );
+    let Diagram::Sequence(s) = validate(&src).expect("valid") else {
+        panic!()
+    };
+    let mut ids: Vec<String> = s.participants.iter().map(|p| p.id.clone()).collect();
+    s.walk(&mut |it| match it {
+        Item::Message(m) => ids.push(m.id.clone()),
+        Item::Note(n) => ids.push(n.id.clone()),
+        _ => {}
+    });
+    let mut sorted = ids.clone();
+    sorted.sort();
+    sorted.dedup();
+    assert_eq!(sorted.len(), ids.len(), "ids must be unique: {ids:?}");
+}
+
+#[test]
+fn message_id_may_not_reuse_a_participant_id() {
+    let src = seq_with(
+        r#"{"type":"message","id":"a","from":"a","to":"b","label":"hi"}"#,
+        r#"[{"id":"a","label":"A"},{"id":"b","label":"B"}]"#,
+    );
+    let errs = validate(&src).expect_err("shared namespace");
+    assert!(has(&errs, "/items/0/id", "duplicate"), "{errs:?}");
+    assert!(has(&errs, "/items/0/id", "/participants/0/id"), "{errs:?}");
+}
+
+#[test]
+fn reserved_generated_id_shapes_are_rejected() {
+    for bad in ["group:1", "x#details", "edge:0", "a:label", "has space"] {
+        let seq = seq_with(
+            &format!(r#"{{"type":"message","id":"{bad}","from":"a","to":"b","label":"hi"}}"#),
+            r#"[{"id":"a","label":"A"},{"id":"b","label":"B"}]"#,
+        );
+        assert!(validate(&seq).is_err(), "sequence message id {bad:?} accepted");
+        let part = seq_with(
+            r#"{"type":"message","from":"a","to":"b","label":"hi"}"#,
+            &format!(r#"[{{"id":"a","label":"A"}},{{"id":"{bad}","label":"B"}}]"#),
+        );
+        assert!(validate(&part).is_err(), "participant id {bad:?} accepted");
+        let flow = format!(
+            r#"{{"type":"flowchart","title":"t","nodes":[{{"id":"{bad}","label":"x"}}]}}"#
+        );
+        let errs = validate(&flow).expect_err(bad);
+        assert!(errs.iter().any(|e| e.path == "/nodes/0/id"), "{bad}: {errs:?}");
+    }
+    // the allowed alphabet still works
+    let ok = r#"{"type":"flowchart","title":"t","nodes":[{"id":"a-b_c.9","label":"x"}]}"#;
+    assert!(validate(ok).is_ok());
+}
+
+#[test]
+fn code_line_is_bounded() {
+    let src = r#"{"type":"flowchart","title":"t","nodes":[{"id":"a","label":"x","code":{"path":"f","line":4294967295}}]}"#;
+    let errs = validate(src).expect_err("huge line");
+    assert!(errs.iter().any(|e| e.path == "/nodes/0/code/line"), "{errs:?}");
+    let src = r#"{"type":"flowchart","title":"t","nodes":[{"id":"a","label":"x","code":{"path":"f","line":1,"end_line":4294967295}}]}"#;
+    assert!(validate(src).is_err());
+}
+
+#[test]
+fn mermaid_compat_drops_participant_types() {
+    let d = validate(&fixture("login_sequence.json")).unwrap();
+    let new = to_mermaid_opts(&d, false);
+    let old = to_mermaid_opts(&d, true);
+    assert!(new.contains("@{"), "fixture should have a database/queue participant:\n{new}");
+    assert!(!old.contains("@{"), "{old}");
+    assert!(old.contains("participant "), "{old}");
+    assert_eq!(to_mermaid(&d), new);
+}

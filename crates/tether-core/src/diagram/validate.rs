@@ -161,7 +161,10 @@ fn collect_schema_errors(
     for e in validator.iter_errors(instance) {
         let rel = e.instance_path().to_string();
         let path = format!("{prefix}{rel}");
-        let msg = e.to_string();
+        let mut msg = e.to_string();
+        if msg.contains("^[A-Za-z0-9_.-]+$") {
+            msg.push_str(" (ids may only contain letters, digits, '_', '.' and '-')");
+        }
         if msg.contains("'oneOf' keyword") || msg.contains("'anyOf' keyword") {
             if let Some(sub) = instance.pointer(&rel) {
                 match sub.get("type").and_then(Value::as_str) {
@@ -214,6 +217,28 @@ pub fn validate_diagram(d: &Diagram) -> Vec<ValidationError> {
     errs
 }
 
+/// Largest accepted `line`/`end_line` (matches the schema `maximum`).
+pub const MAX_LINE: u32 = 10_000_000;
+
+/// Ids are restricted to `[A-Za-z0-9_.-]+`. That keeps user ids disjoint from the generated
+/// object ids the layout uses (`group:<n>`, `<id>#details`, `edge:<..>`, `<..>:label`).
+fn check_id_chars(errs: &mut Vec<ValidationError>, path: String, what: &str, id: &str) {
+    if id.is_empty() {
+        return;
+    }
+    if !id
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-'))
+    {
+        errs.push(ValidationError::new(
+            path,
+            format!(
+                "{what} \"{id}\" may only contain letters, digits, '_', '.' and '-' (no spaces, ':' or '#')"
+            ),
+        ));
+    }
+}
+
 fn nonempty(errs: &mut Vec<ValidationError>, path: String, what: &str, s: &str) {
     if s.trim().is_empty() {
         errs.push(ValidationError::new(
@@ -242,7 +267,19 @@ fn check_code(errs: &mut Vec<ValidationError>, path: &str, c: &CodeRef) {
             "line is 1-based and must be >= 1",
         ));
     }
+    if c.line > MAX_LINE {
+        errs.push(ValidationError::new(
+            format!("{path}/line"),
+            format!("line must be <= {MAX_LINE}"),
+        ));
+    }
     if let Some(end) = c.end_line {
+        if end > MAX_LINE {
+            errs.push(ValidationError::new(
+                format!("{path}/end_line"),
+                format!("end_line must be <= {MAX_LINE}"),
+            ));
+        }
         if end < c.line {
             errs.push(ValidationError::new(
                 format!("{path}/end_line"),
@@ -276,6 +313,7 @@ fn check_flowchart(f: &Flowchart, errs: &mut Vec<ValidationError>) {
     for (i, n) in f.nodes.iter().enumerate() {
         let base = format!("/nodes/{i}");
         nonempty(errs, format!("{base}/id"), "node id", &n.id);
+        check_id_chars(errs, format!("{base}/id"), "node id", &n.id);
         nonempty(errs, format!("{base}/label"), "node label", &n.label);
         if let Some(first) = ids.insert(n.id.as_str(), i) {
             errs.push(ValidationError::new(
@@ -326,6 +364,7 @@ fn check_sequence(s: &Sequence, errs: &mut Vec<ValidationError>) {
     for (i, p) in s.participants.iter().enumerate() {
         let base = format!("/participants/{i}");
         nonempty(errs, format!("{base}/id"), "participant id", &p.id);
+        check_id_chars(errs, format!("{base}/id"), "participant id", &p.id);
         nonempty(errs, format!("{base}/label"), "participant label", &p.label);
         if !ctx.participants.insert(p.id.as_str()) {
             let first = s
@@ -337,6 +376,8 @@ fn check_sequence(s: &Sequence, errs: &mut Vec<ValidationError>) {
                 format!("{base}/id"),
                 dup_hint("participant", &p.id, &format!("/participants/{first}/id")),
             ));
+        } else {
+            ctx.item_ids.insert(p.id.as_str(), format!("{base}/id"));
         }
     }
     check_items(&s.items, "/items", &mut ctx, s, errs);
@@ -361,11 +402,12 @@ fn check_items<'a>(
         match it {
             Item::Message(m) => {
                 nonempty(errs, format!("{p}/id"), "message id", &m.id);
+                check_id_chars(errs, format!("{p}/id"), "message id", &m.id);
                 nonempty(errs, format!("{p}/label"), "message label", &m.label);
                 if let Some(first) = ctx.item_ids.insert(m.id.as_str(), format!("{p}/id")) {
                     errs.push(ValidationError::new(
                         format!("{p}/id"),
-                        dup_hint("message/note", &m.id, &first),
+                        dup_hint("participant/message/note", &m.id, &first),
                     ));
                 }
                 for (field, id) in [("from", &m.from), ("to", &m.to)] {
@@ -383,11 +425,12 @@ fn check_items<'a>(
             }
             Item::Note(n) => {
                 nonempty(errs, format!("{p}/id"), "note id", &n.id);
+                check_id_chars(errs, format!("{p}/id"), "note id", &n.id);
                 nonempty(errs, format!("{p}/text"), "note text", &n.text);
                 if let Some(first) = ctx.item_ids.insert(n.id.as_str(), format!("{p}/id")) {
                     errs.push(ValidationError::new(
                         format!("{p}/id"),
-                        dup_hint("message/note", &n.id, &first),
+                        dup_hint("participant/message/note", &n.id, &first),
                     ));
                 }
                 for (j, id) in n.over.iter().enumerate() {

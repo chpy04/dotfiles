@@ -196,7 +196,8 @@ fn create_open_tab_names_the_tab_after_the_title_and_runs_the_viewer() {
     assert_eq!(sent.len(), 1);
     assert_eq!(sent[0].params["pane_id"], "w1:p7", "only the pane we created receives input");
     let text = sent[0].params["text"].as_str().unwrap();
-    assert!(text.starts_with("exec "), "{text}");
+    assert!(text.starts_with("exec sh -c "), "{text}");
+    assert!(text.contains("press enter to close"), "a failing viewer must wait for a key: {text}");
     assert!(text.contains("env TETHER_CONFIG=") && text.contains("TETHER_STATE="), "env is carried into the pane: {text}");
     assert!(text.ends_with(&format!("tether view {id}")) || text.ends_with(&format!(" view {id}")), "{text}");
     // the tab is recorded as tether-made (state file written by the layout helpers)
@@ -310,4 +311,43 @@ fn view_without_a_terminal_is_a_clear_usage_error() {
     let o = env.cmd(None).args(["view", &id]).stdin(Stdio::null()).output().unwrap();
     assert_eq!(o.status.code(), Some(2));
     assert!(err(&o).contains("interactive terminal"), "{}", err(&o));
+}
+
+fn run_with_stdin(env: &Env, args: &[&str], stdin: &str) -> Output {
+    let mut child = env.cmd(None).args(args).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+    child.stdin.take().unwrap().write_all(stdin.as_bytes()).unwrap();
+    child.wait_with_output().unwrap()
+}
+
+#[test]
+fn ids_that_collide_with_generated_ids_are_exit_2_and_not_stored() {
+    let env = Env::new();
+    let bad_flow = r##"{"type":"flowchart","title":"t","nodes":[{"id":"x#details","label":"a"},{"id":"edge:0","label":"b"}],"edges":[]}"##;
+    let o = run_with_stdin(&env, &["diagram", "create", "-", "--open", "none"], bad_flow);
+    assert_eq!(o.status.code(), Some(2), "{}", err(&o));
+    assert!(err(&o).contains("/nodes/0/id") && err(&o).contains("/nodes/1/id"), "{}", err(&o));
+    let bad_seq = r#"{"type":"sequence","title":"t","participants":[{"id":"a","label":"A"},{"id":"b","label":"B"}],
+        "items":[{"type":"message","id":"a","from":"a","to":"b","label":"x"},{"type":"message","id":"group:1","from":"a","to":"b","label":"y"}]}"#;
+    let o = run_with_stdin(&env, &["diagram", "create", "-", "--open", "none"], bad_seq);
+    assert_eq!(o.status.code(), Some(2), "{}", err(&o));
+    assert!(err(&o).contains("/items/1/id") && err(&o).contains("letters, digits"), "{}", err(&o));
+    // the shared namespace is a semantic check, reported once the schema passes
+    let dup = bad_seq.replace("group:1", "m9");
+    let o = run_with_stdin(&env, &["diagram", "create", "-", "--open", "none"], &dup);
+    assert_eq!(o.status.code(), Some(2), "{}", err(&o));
+    assert!(err(&o).contains("duplicate") && err(&o).contains("/items/0/id"), "{}", err(&o));
+    let o = env.cmd(None).args(["diagram", "list"]).output().unwrap();
+    assert!(out(&o).contains("no diagrams"), "{}", out(&o));
+    // update with a bad spec leaves the stored one alone
+    let id = create(&env, "prd_flowchart");
+    let before = env.cmd(None).args(["diagram", "show", &id]).output().unwrap();
+    let o = run_with_stdin(&env, &["diagram", "update", &id, "-"], bad_flow);
+    assert_eq!(o.status.code(), Some(2));
+    let after = env.cmd(None).args(["diagram", "show", &id]).output().unwrap();
+    assert_eq!(out(&before), out(&after));
+    // participants named like the auto ids still work
+    let ok = r#"{"type":"sequence","title":"t","participants":[{"id":"m1","label":"M"},{"id":"n1","label":"N"}],
+        "items":[{"type":"message","from":"m1","to":"n1","label":"x"},{"type":"note","over":["m1"],"text":"hi"}]}"#;
+    let o = run_with_stdin(&env, &["diagram", "create", "-", "--open", "none"], ok);
+    assert!(o.status.success(), "{}", err(&o));
 }

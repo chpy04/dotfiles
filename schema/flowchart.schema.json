@@ -11,12 +11,14 @@
         "end_line": {
           "description": "Optional 1-based last line of a range; must be >= `line`.",
           "format": "uint32",
+          "maximum": 10000000,
           "minimum": 1,
           "type": "integer"
         },
         "line": {
           "description": "1-based line number.",
           "format": "uint32",
+          "maximum": 10000000,
           "minimum": 1,
           "type": "integer"
         },
@@ -111,8 +113,9 @@
           "type": "array"
         },
         "id": {
-          "description": "Unique id within the diagram.",
+          "description": "Unique id within the diagram: letters, digits, `_`, `.` and `-` only.",
           "minLength": 1,
+          "pattern": "^[A-Za-z0-9_.-]+$",
           "type": "string"
         },
         "label": {

@@ -8,7 +8,7 @@ use std::time::UNIX_EPOCH;
 use clap::{Args, Subcommand};
 use serde_json::json;
 use tether_core::config::Config;
-use tether_core::diagram::{self, format_errors, to_mermaid, Diagram, DiagramStore, StoreError};
+use tether_core::diagram::{self, format_errors, to_mermaid_opts, Diagram, DiagramStore, StoreError};
 use tether_core::error::{Result, TetherError};
 use tether_core::herdr::Client;
 use tether_core::panes::{self, Scope, SplitOpts};
@@ -81,6 +81,9 @@ pub struct ExportArgs {
     /// Mermaid source (the only format; the flag is accepted for explicitness)
     #[arg(long)]
     pub mermaid: bool,
+    /// Emit plain `participant` lines (no `@{ "type": ... }`) so Mermaid versions before 11 can parse it
+    #[arg(long)]
+    pub compat: bool,
 }
 
 #[derive(Args)]
@@ -134,11 +137,47 @@ fn read_spec_text(spec: &str) -> Result<String> {
 pub fn parse_spec(text: &str) -> Result<Diagram> {
     diagram::validate(text).map_err(|errs| {
         TetherError::Input(format!(
-            "invalid diagram spec ({} problem{}):\n{}\nschemas: schema/flowchart.schema.json, schema/sequence.schema.json (see skill/diagrams.md)",
+            "invalid diagram spec ({} problem{}):\n{}\nschemas: schema/flowchart.schema.json, schema/sequence.schema.json (see the Diagrams section of skill/SKILL.md)",
             errs.len(),
             if errs.len() == 1 { "" } else { "s" },
             format_errors(&errs)
         ))
+    })
+}
+
+/// Parse and validate a spec, then dry-run the layout (all details expanded, so panels are
+/// checked too) so a spec that validates but cannot be laid out fails here with an exit-2
+/// message instead of after it was stored. Uses the `auto` engine: a missing Graphviz is not
+/// an input error.
+pub fn parse_and_check(text: &str) -> Result<Diagram> {
+    let d = parse_spec(text)?;
+    check_layout(&d)?;
+    Ok(d)
+}
+
+/// Dry-run [`tether_core::layout::layout`] on `d`.
+pub fn check_layout(d: &Diagram) -> Result<()> {
+    use std::collections::HashSet;
+    use tether_core::layout::{layout, Engine, LayoutInput, ObjectId};
+    let mut expanded: HashSet<ObjectId> = HashSet::new();
+    match d {
+        Diagram::Flowchart(f) => expanded.extend(f.nodes.iter().map(|n| ObjectId::from(n.id.as_str()))),
+        Diagram::Sequence(sq) => {
+            sq.walk(&mut |it| match it {
+                tether_core::diagram::Item::Message(m) => {
+                    expanded.insert(ObjectId::from(m.id.as_str()));
+                }
+                tether_core::diagram::Item::Note(n) => {
+                    expanded.insert(ObjectId::from(n.id.as_str()));
+                }
+                _ => {}
+            });
+        }
+    }
+    let mut input = LayoutInput::new(d, &expanded);
+    input.opts.engine = Engine::Auto;
+    layout(&input).map(|_| ()).map_err(|e| {
+        TetherError::Input(format!("the spec is valid but cannot be laid out: {e}; fix the ids/labels or simplify the diagram"))
     })
 }
 
@@ -166,11 +205,18 @@ pub fn parse_placement(s: &str) -> Result<Placement> {
 const FORWARDED_ENV: [&str; 8] =
     ["TETHER_CONFIG", "TETHER_STATE", "TETHER_DOT", "TETHER_ICONS", "TETHER_NVIM", "TETHER_NVIM_WRAPPER", "TETHER_BIN", "XDG_RUNTIME_DIR"];
 
-/// The shell command that runs the viewer in a fresh pane: `exec [env K=V…] <tether> view <id>`.
-/// `exec` makes the pane close when the viewer quits.
+/// Script run by `sh -c` around the viewer: a failing viewer prints its error (already on stderr)
+/// and waits for enter, so the message is not lost when the pane closes. A normal quit (`q`,
+/// exit 0) closes the pane at once. The viewer and its arguments arrive as `"$@"`.
+const VIEWER_SCRIPT: &str = r#""$@" || { printf '\n[tether view failed; press enter to close] '; read -r _; }"#;
+
+/// The shell command that runs the viewer in a fresh pane:
+/// `exec sh -c '<VIEWER_SCRIPT>' tether-view [env K=V…] <tether> view <id>`.
+/// `exec` makes the pane close when the viewer quits; each token is shell-quoted by the caller
+/// (`panes::command_line`).
 pub fn viewer_command(id: &str) -> Result<Vec<String>> {
     let exe = std::env::current_exe().map_err(|e| TetherError::Other(format!("cannot locate the tether binary: {e}")))?;
-    let mut cmd = vec!["exec".to_string()];
+    let mut cmd: Vec<String> = ["exec", "sh", "-c", VIEWER_SCRIPT, "tether-view"].map(String::from).to_vec();
     let env: Vec<String> = FORWARDED_ENV
         .iter()
         .filter_map(|k| std::env::var(k).ok().filter(|v| !v.is_empty()).map(|v| format!("{k}={v}")))
@@ -235,11 +281,11 @@ pub fn run(c: DiagramCmd) -> Result<()> {
         DiagramCmd::Export(a) => {
             let _ = a.mermaid;
             let d = DiagramStore::open(&cwd()?).get(&a.id).map_err(store_err)?;
-            print!("{}", to_mermaid(&d));
+            print!("{}", to_mermaid_opts(&d, a.compat));
             Ok(())
         }
         DiagramCmd::Update { id, spec } => {
-            let d = parse_spec(&read_spec_text(&spec)?)?;
+            let d = parse_and_check(&read_spec_text(&spec)?)?;
             DiagramStore::open(&cwd()?).update(&id, &d).map_err(store_err)?;
             println!("updated {id}");
             Ok(())
@@ -255,7 +301,7 @@ pub fn run(c: DiagramCmd) -> Result<()> {
 
 fn create(a: CreateArgs) -> Result<()> {
     // validate everything that can be wrong with the input before touching the store or Herdr
-    let d = parse_spec(&read_spec_text(&a.spec)?)?;
+    let d = parse_and_check(&read_spec_text(&a.spec)?)?;
     let cfg = Config::load()?;
     let placement = parse_placement(a.open.as_deref().unwrap_or(&cfg.placement.diagram))?;
     let store = DiagramStore::open(&cwd()?);
@@ -325,4 +371,42 @@ fn render(a: RenderArgs) -> Result<()> {
     let (text, ansi) = view::render_static(d, store.worktree_root().to_path_buf(), &cfg, &opts)?;
     print!("{}", if a.ansi { ansi } else { text });
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    fn run_wrapper(args: &[&str], stdin: &str) -> (bool, String, String) {
+        let mut cmd: Vec<String> = ["exec", "sh", "-c", VIEWER_SCRIPT, "tether-view"].map(String::from).to_vec();
+        cmd.extend(args.iter().map(|a| a.to_string()));
+        let line = panes::command_line(&cmd);
+        let mut c = Command::new("sh")
+            .args(["-c", &line])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        c.stdin.take().unwrap().write_all(stdin.as_bytes()).unwrap();
+        let o = c.wait_with_output().unwrap();
+        (o.status.success(), String::from_utf8_lossy(&o.stdout).into_owned(), String::from_utf8_lossy(&o.stderr).into_owned())
+    }
+
+    #[test]
+    fn failing_viewer_prints_error_and_waits_for_enter() {
+        let (ok, out, err) = run_wrapper(&["sh", "-c", "echo boom >&2; exit 3"], "\n");
+        assert!(ok);
+        assert!(err.contains("boom"), "{err}");
+        assert!(out.contains("tether view failed; press enter to close"), "{out}");
+    }
+
+    #[test]
+    fn clean_quit_closes_without_waiting() {
+        let (ok, out, _) = run_wrapper(&["true"], "");
+        assert!(ok);
+        assert!(!out.contains("press enter"), "{out}");
+    }
 }

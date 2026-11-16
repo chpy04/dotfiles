@@ -151,29 +151,29 @@ pub struct PayloadParts {
 }
 
 /// Longest code line (in characters) put into a comment; longer lines are cut and end with `…`.
-/// TODO(orchestrator): make this `[comment] max_code_line_width` in config.rs (not edited here
-/// to avoid clashing with the viewer work).
-pub const MAX_CODE_LINE_WIDTH: usize = 200;
+/// Configurable as `[comment] max_code_line_width`; this is the default.
+pub use crate::config::DEFAULT_MAX_CODE_LINE_WIDTH as MAX_CODE_LINE_WIDTH;
 
-fn clip_line(l: &str) -> String {
+fn clip_line(l: &str, max_width: usize) -> String {
     let l = sanitize(l);
     let l = l.trim_end();
-    match l.char_indices().nth(MAX_CODE_LINE_WIDTH) {
+    match l.char_indices().nth(max_width) {
         Some((i, _)) => format!("{}…", &l[..i]),
         None => l.to_string(),
     }
 }
 
-/// Format code lines as `  142 │ text` (numbers right-aligned to the widest). If `hidden > 0`
-/// a final `  … (N more lines)` line is added.
-pub fn format_code(lines: &[(u32, String)], hidden: usize) -> String {
+/// Format code lines as `  142 │ text` (numbers right-aligned to the widest). Lines longer than
+/// `max_width` characters are cut and end with `…`. If `hidden > 0` a final `  … (N more lines)`
+/// line is added.
+pub fn format_code(lines: &[(u32, String)], hidden: usize, max_width: usize) -> String {
     if lines.is_empty() {
         return String::new();
     }
     let width = lines.iter().map(|(n, _)| n.to_string().len()).max().unwrap_or(1);
     let mut out: Vec<String> = lines
         .iter()
-        .map(|(n, l)| format!("  {n:>width$} │ {}", clip_line(l)))
+        .map(|(n, l)| format!("  {n:>width$} │ {}", clip_line(l, max_width)))
         .collect();
     if hidden > 0 {
         out.push(format!("  … ({hidden} more line{})", if hidden == 1 { "" } else { "s" }));
@@ -322,7 +322,7 @@ pub fn prepare_comment(cfg: &CommentConfig, r: &CodeRef, text: &str, cwd: &Path)
         line: r.line,
         range: r.range_string(),
         worktree: sanitize(&worktree),
-        code: format_code(&lines, hidden),
+        code: format_code(&lines, hidden, cfg.max_code_line_width),
         text,
     };
     let payload = render_template(&cfg.template, &parts);
@@ -392,7 +392,7 @@ pub fn prepare_diagram_comment(cfg: &CommentConfig, t: &DiagramTarget<'_>, text:
         }
         if usable {
             let (lines, hidden) = read_code_lines(&root.join(&c.path), line, end.unwrap_or(line), cfg.max_code_lines);
-            code_block = format_code(&lines, hidden);
+            code_block = format_code(&lines, hidden, cfg.max_code_line_width);
         }
     }
     header.push_str(&format!("  (worktree: {worktree})"));
@@ -568,7 +568,7 @@ mod tests {
 
     #[test]
     fn single_line_matches_prd_example() {
-        let code = format_code(&[(142, "if (token.expiresAt < Date.now()) {".into())], 0);
+        let code = format_code(&[(142, "if (token.expiresAt < Date.now()) {".into())], 0, MAX_CODE_LINE_WIDTH);
         let out = render_template(DEFAULT_TEMPLATE, &parts(&code));
         assert_eq!(
             out,
@@ -579,10 +579,10 @@ mod tests {
     #[test]
     fn range_numbers_are_aligned_and_truncated() {
         let lines: Vec<(u32, String)> = (98..=101).map(|n| (n, format!("line {n}"))).collect();
-        assert_eq!(format_code(&lines, 0), "   98 │ line 98\n   99 │ line 99\n  100 │ line 100\n  101 │ line 101");
-        assert!(format_code(&lines, 3).ends_with("\n  … (3 more lines)"));
-        assert!(format_code(&lines, 1).ends_with("(1 more line)"));
-        assert_eq!(format_code(&[], 0), "");
+        assert_eq!(format_code(&lines, 0, 200), "   98 │ line 98\n   99 │ line 99\n  100 │ line 100\n  101 │ line 101");
+        assert!(format_code(&lines, 3, 200).ends_with("\n  … (3 more lines)"));
+        assert!(format_code(&lines, 1, 200).ends_with("(1 more line)"));
+        assert_eq!(format_code(&[], 0, 200), "");
     }
 
     #[test]
@@ -608,7 +608,7 @@ mod tests {
 
     #[test]
     fn unicode_survives() {
-        let code = format_code(&[(7, "let s = \"héllo → 世界 🦀\";".into())], 0);
+        let code = format_code(&[(7, "let s = \"héllo → 世界 🦀\";".into())], 0, 200);
         let mut p = parts(&code);
         p.text = "Pourquoi « ça » ? 日本語 ✓".into();
         let out = render_template(DEFAULT_TEMPLATE, &p);
@@ -654,12 +654,32 @@ mod tests {
     #[test]
     fn long_code_lines_are_cut_at_200_chars() {
         let long = "é".repeat(500);
-        let out = format_code(&[(1, long.clone()), (2, "short".into()), (3, "x".repeat(200))], 0);
+        let out = format_code(&[(1, long.clone()), (2, "short".into()), (3, "x".repeat(200))], 0, MAX_CODE_LINE_WIDTH);
         let lines: Vec<&str> = out.lines().collect();
         assert_eq!(lines[0].chars().filter(|&c| c == 'é').count(), MAX_CODE_LINE_WIDTH);
         assert!(lines[0].ends_with('…'));
         assert_eq!(lines[1], "  2 │ short");
         assert!(!lines[2].ends_with('…'), "exactly 200 chars is not cut");
+    }
+
+    #[test]
+    fn code_line_width_is_a_parameter() {
+        let out = format_code(&[(1, "abcdefghij".into()), (2, "abc".into())], 0, 4);
+        assert_eq!(out, "  1 │ abcd…\n  2 │ abc");
+    }
+
+    #[test]
+    fn configured_width_reaches_comments_from_files() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.txt"), format!("{}\n", "z".repeat(60))).unwrap();
+        let r: CodeRef = "a.txt:1".parse().unwrap();
+        let mut c = cfg();
+        c.max_code_line_width = 30;
+        let p = prepare_comment(&c, &r, "q", dir.path()).unwrap();
+        assert!(p.payload.contains(&format!("│ {}…\n", "z".repeat(30))), "{}", p.payload);
+        // default keeps the whole 60-char line
+        let p = prepare_comment(&cfg(), &r, "q", dir.path()).unwrap();
+        assert!(p.payload.contains(&format!("│ {}\n", "z".repeat(60))), "{}", p.payload);
     }
 
     #[test]

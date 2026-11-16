@@ -423,18 +423,38 @@ fn draw_panels(app: &App, p: &mut Painter) {
             bs = bs.add_modifier(Modifier::BOLD);
         }
         p.frame(o.rect, false, bs, st(th.fg, th.panel));
+        // the owner's code link as re-resolved on disk: a moved link shows its new line
+        let owner_code = o.owner.as_ref().and_then(|id| app.elements.get(id)).and_then(|e| e.code.as_ref());
+        let state = o.owner.as_ref().and_then(|id| app.link_state(id));
+        let inner = (o.rect.w as usize).saturating_sub(4);
         for s in &o.sections {
             let is_code = s.title == "CODE";
             let title_color = if is_code { th.link } else { th.warn };
-            p.text(
-                o.rect.x as i32 + 2,
-                s.y as i32,
-                &s.title.to_uppercase(),
-                st(title_color, th.panel).add_modifier(Modifier::BOLD),
-            );
-            for (i, line) in s.body.iter().enumerate() {
+            let tx = o.rect.x as i32 + 2;
+            p.text(tx, s.y as i32, &s.title.to_uppercase(), st(title_color, th.panel).add_modifier(Modifier::BOLD));
+            let mut body: Vec<String> = s.body.clone();
+            if is_code {
+                let note = match (state, owner_code) {
+                    (Some(Resolved::Moved(new)), Some(c)) => {
+                        let shift = new as i64 - c.line as i64;
+                        let text = match c.end_line {
+                            Some(e) => format!("{}:{}-{}", c.path, new, (e as i64 + shift).max(new as i64)),
+                            None => format!("{}:{}", c.path, new),
+                        };
+                        body = vec![truncate(&text, inner)];
+                        Some((format!(" moved from L{}", c.line), th.warn))
+                    }
+                    (Some(Resolved::Stale), _) => Some((" stale link".to_string(), th.error)),
+                    (Some(Resolved::MissingFile), _) => Some((" file missing".to_string(), th.error)),
+                    _ => None,
+                };
+                if let Some((txt, color)) = note {
+                    p.text(tx + 4, s.y as i32, &truncate(&txt, inner.saturating_sub(4)), st(color, th.panel).add_modifier(Modifier::ITALIC));
+                }
+            }
+            for (i, line) in body.iter().enumerate() {
                 let style = if is_code { st(th.link, th.panel).add_modifier(Modifier::UNDERLINED) } else { st(th.fg, th.panel) };
-                p.text(o.rect.x as i32 + 2, (s.y + 1 + i as u16) as i32, line, style);
+                p.text(tx, (s.y + 1 + i as u16) as i32, line, style);
             }
         }
     }
@@ -602,7 +622,7 @@ fn draw_seq(app: &App, p: &mut Painter) {
         }
         draw_decor(app, p, o, th.bg, false, tier);
         if tier == Tier::Focus && o.has_code {
-            // `⏎ code` hint after the label/decor, when it fits between the lifelines
+            // `⏎ code` hint after the label/decor
             let r = o.label_rect.unwrap_or(o.rect);
             let mut end = r.x as i32 + o.label.iter().map(|s| str_width(s)).max().unwrap_or(0) as i32;
             if let Some(c) = o.decor.code {
@@ -613,7 +633,9 @@ fn draw_seq(app: &App, p: &mut Painter) {
             }
             let stale = matches!(app.link_state(&o.id), Some(Resolved::Stale) | Some(Resolved::MissingFile));
             let (hint, hc) = if stale { (" stale link".to_string(), th.error) } else { (" ⏎ code".to_string(), th.dim) };
-            if end + str_width(&hint) as i32 <= o.rect.right() as i32 {
+            // prefer the room between the lifelines; otherwise let it run over the next lifeline
+            // (the label row holds nothing else) as long as it stays on the canvas
+            if end + str_width(&hint) as i32 <= (l.width as i32).max(o.rect.right() as i32) {
                 p.text(end, r.y as i32, &hint, st(hc, th.bg).add_modifier(Modifier::ITALIC));
             }
         }

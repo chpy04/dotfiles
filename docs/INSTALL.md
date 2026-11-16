@@ -124,3 +124,10 @@ installer never touches the dotfiles):
 4. Add the `[keys]` remap above if `<leader>ac` is to stay Copilot's prefix.
 5. Optionally list the tether keys in `dotfiles/nvim/keymaps.md` (`<leader>ac`/`<leader>aC`, or your
    remapped ones).
+
+## 6. The diagram viewer and the mouse
+
+`tether view` captures the mouse by default (click to focus, wheel to scroll), so a plain drag no
+longer selects text in the terminal. Hold **Shift** while dragging (Option on some macOS terminals)
+to select text as usual, or set `mouse = false` under `[view]` in the config to leave the mouse to the
+terminal altogether.

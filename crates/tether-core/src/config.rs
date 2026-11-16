@@ -10,6 +10,11 @@ use crate::error::{Result, TetherError};
 /// Default payload template (F2.4). Placeholders: `{path} {line} {range} {worktree} {code} {text}`.
 pub const DEFAULT_TEMPLATE: &str = "[comment] {path}:{range}  (worktree: {worktree})\n{code}\n{text}";
 
+/// Default for `[comment] max_code_line_width`.
+pub const DEFAULT_MAX_CODE_LINE_WIDTH: usize = 200;
+/// Smallest accepted `[comment] max_code_line_width`.
+pub const MIN_CODE_LINE_WIDTH: usize = 20;
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
@@ -69,11 +74,13 @@ pub struct CommentConfig {
     pub template: String,
     /// Longest code excerpt (in lines) put into a comment; longer ranges are truncated.
     pub max_code_lines: usize,
+    /// Longest code line (characters) put into a comment; longer lines are cut and end with `…`.
+    pub max_code_line_width: usize,
 }
 
 impl Default for CommentConfig {
     fn default() -> Self {
-        CommentConfig { template: DEFAULT_TEMPLATE.into(), max_code_lines: 20 }
+        CommentConfig { template: DEFAULT_TEMPLATE.into(), max_code_lines: 20, max_code_line_width: DEFAULT_MAX_CODE_LINE_WIDTH }
     }
 }
 
@@ -158,6 +165,8 @@ template = '''
 {text}'''
 # Longest code excerpt (lines) included in a comment.
 max_code_lines = 20
+# Longest code line (characters) included in a comment; longer lines are cut with "…" (minimum 20).
+max_code_line_width = 200
 
 [placement]
 # Where a diagram opens: "tab" | "split" | "here".
@@ -229,6 +238,11 @@ impl Config {
         }
         if self.comment.max_code_lines == 0 {
             return Err(TetherError::Config("invalid config: [comment] max_code_lines must be at least 1".into()));
+        }
+        if self.comment.max_code_line_width < MIN_CODE_LINE_WIDTH {
+            return Err(TetherError::Config(format!(
+                "invalid config: [comment] max_code_line_width must be at least {MIN_CODE_LINE_WIDTH}"
+            )));
         }
         crate::theme::Theme::from_config(&self.theme).map_err(|e| TetherError::Config(format!("invalid config: {e}")))?;
         Ok(())
@@ -305,6 +319,21 @@ mod tests {
         let e = Config::parse("[comment]\ntemplate = \"nothing here\"\n").unwrap_err();
         assert!(e.to_string().contains("{text}"));
         assert!(Config::parse("[comment]\nmax_code_lines = 0\n").is_err());
+    }
+
+    #[test]
+    fn max_code_line_width_default_override_and_minimum() {
+        assert_eq!(Config::default().comment.max_code_line_width, 200);
+        assert_eq!(Config::parse(DEFAULT_FILE).unwrap().comment.max_code_line_width, 200);
+        assert!(DEFAULT_FILE.contains("max_code_line_width = 200"));
+        let c = Config::parse("[comment]\nmax_code_line_width = 80\n").unwrap();
+        assert_eq!(c.comment.max_code_line_width, 80);
+        assert_eq!(c.get("comment.max_code_line_width").unwrap(), serde_json::json!(80));
+        assert!(Config::parse("[comment]\nmax_code_line_width = 20\n").is_ok());
+        let e = Config::parse("[comment]\nmax_code_line_width = 19\n").unwrap_err();
+        assert!(e.to_string().contains("max_code_line_width"), "{e}");
+        assert!(Config::parse("[comment]\nmax_code_line_width = 0\n").is_err());
+        assert!(Config::parse("[comment]\nmax_code_line_width = -5\n").is_err());
     }
 
     #[test]

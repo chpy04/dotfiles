@@ -75,28 +75,73 @@ pub(super) fn build_dot(
     s
 }
 
+/// How long `dot` may run before it is killed (the `auto` engine then falls back to the naive
+/// placement).
+const DOT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
 fn run_dot(dot_path: &str, src: &str) -> Result<String, LayoutError> {
+    run_dot_with_timeout(dot_path, src, DOT_TIMEOUT)
+}
+
+pub(super) fn run_dot_with_timeout(
+    dot_path: &str,
+    src: &str,
+    timeout: std::time::Duration,
+) -> Result<String, LayoutError> {
+    use std::io::Read;
+    use std::time::Instant;
+    let missing = |e: std::io::Error| LayoutError::DotMissing(dot_path.to_string(), e.to_string());
     let mut child = Command::new(dot_path)
         .arg("-Tplain")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|e| LayoutError::DotMissing(dot_path.to_string(), e.to_string()))?;
+        .map_err(missing)?;
+    // feed stdin and drain both outputs on their own threads so nothing can block the wait
     if let Some(mut stdin) = child.stdin.take() {
-        // dot reads its whole input before writing; the input is small.
-        let _ = stdin.write_all(src.as_bytes());
-    }
-    let out = child
-        .wait_with_output()
-        .map_err(|e| LayoutError::DotMissing(dot_path.to_string(), e.to_string()))?;
-    if !out.status.success() {
-        return Err(LayoutError::DotFailed {
-            status: out.status.to_string(),
-            stderr: String::from_utf8_lossy(&out.stderr).trim().to_string(),
+        let src = src.to_string();
+        std::thread::spawn(move || {
+            let _ = stdin.write_all(src.as_bytes());
         });
     }
-    String::from_utf8(out.stdout).map_err(|e| LayoutError::DotParse(e.to_string()))
+    fn drain<R: Read + Send + 'static>(pipe: Option<R>) -> std::sync::mpsc::Receiver<Vec<u8>> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            if let Some(mut p) = pipe {
+                let _ = p.read_to_end(&mut buf);
+            }
+            let _ = tx.send(buf);
+        });
+        rx
+    }
+    let (out_rx, err_rx) = (drain(child.stdout.take()), drain(child.stderr.take()));
+    let deadline = Instant::now() + timeout;
+    let status = loop {
+        match child.try_wait().map_err(missing)? {
+            Some(st) => break st,
+            None if Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(LayoutError::DotFailed {
+                    status: format!("timed out after {}s", timeout.as_secs_f64()),
+                    stderr: "graphviz was stopped".to_string(),
+                });
+            }
+            None => std::thread::sleep(std::time::Duration::from_millis(5)),
+        }
+    };
+    let grace = std::time::Duration::from_millis(500);
+    let stdout = out_rx.recv_timeout(grace).unwrap_or_default();
+    let stderr = err_rx.recv_timeout(grace).unwrap_or_default();
+    if !status.success() {
+        return Err(LayoutError::DotFailed {
+            status: status.to_string(),
+            stderr: String::from_utf8_lossy(&stderr).trim().to_string(),
+        });
+    }
+    String::from_utf8(stdout).map_err(|e| LayoutError::DotParse(e.to_string()))
 }
 
 struct Plain {
@@ -444,5 +489,54 @@ fn place_naive(
         rank,
         cross,
         edge_cross,
+    }
+}
+
+#[cfg(test)]
+mod dot_timeout_tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+    use std::time::{Duration, Instant};
+
+    fn script(dir: &std::path::Path, body: &str) -> String {
+        let p = dir.join("fake-dot");
+        std::fs::write(&p, format!("#!/bin/sh\n{body}\n")).unwrap();
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+        p.to_string_lossy().into_owned()
+    }
+
+    #[test]
+    fn hung_dot_is_killed_at_the_deadline() {
+        let d = tempfile::tempdir().unwrap();
+        let dot = script(d.path(), "sleep 30");
+        let t = Instant::now();
+        let err = run_dot_with_timeout(&dot, "digraph{}", Duration::from_millis(200)).unwrap_err();
+        assert!(t.elapsed() < Duration::from_secs(5), "{:?}", t.elapsed());
+        assert!(matches!(err, LayoutError::DotFailed { ref status, .. } if status.contains("timed out")), "{err}");
+    }
+
+    #[test]
+    fn auto_engine_falls_back_to_naive_when_dot_hangs_or_is_missing() {
+        let d = tempfile::tempdir().unwrap();
+        let sizes = [(10, 3), (10, 3)];
+        let mut opts = LayoutOptions {
+            engine: Engine::Auto,
+            dot_path: script(d.path(), "exit 1"),
+            ..LayoutOptions::default()
+        };
+        assert!(place(&sizes, &[(0, 1)], false, 4, &opts).is_ok());
+        opts.dot_path = "/nonexistent/dot".into();
+        assert!(place(&sizes, &[(0, 1)], false, 4, &opts).is_ok());
+        opts.engine = Engine::Dot;
+        assert!(place(&sizes, &[(0, 1)], false, 4, &opts).is_err());
+    }
+
+    #[test]
+    fn chatty_dot_does_not_deadlock() {
+        let d = tempfile::tempdir().unwrap();
+        // writes far more than a pipe buffer to both streams before exiting
+        let dot = script(d.path(), "yes x | head -c 400000 >&2; yes y | head -c 400000");
+        let out = run_dot_with_timeout(&dot, "digraph{}", Duration::from_secs(10)).unwrap();
+        assert_eq!(out.len(), 400000);
     }
 }

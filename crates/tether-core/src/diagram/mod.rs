@@ -11,7 +11,7 @@ pub mod validate;
 
 pub use anchor::{resolve, resolve_with_window, Resolved, DEFAULT_WINDOW};
 pub use element::{elements, find_element, Element, ElementKind};
-pub use mermaid::to_mermaid;
+pub use mermaid::{to_mermaid, to_mermaid_opts};
 pub use spec::*;
 pub use store::{DiagramInfo, DiagramStore, StoreError};
 pub use validate::{format_errors, normalize, validate, validate_diagram, ValidationError};

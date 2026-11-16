@@ -33,12 +33,14 @@
         "end_line": {
           "description": "Optional 1-based last line of a range; must be >= `line`.",
           "format": "uint32",
+          "maximum": 10000000,
           "minimum": 1,
           "type": "integer"
         },
         "line": {
           "description": "1-based line number.",
           "format": "uint32",
+          "maximum": 10000000,
           "minimum": 1,
           "type": "integer"
         },
@@ -108,7 +110,8 @@
             },
             "id": {
               "default": "",
-              "description": "Stable id; assigned as `m1`, `m2`, ... at load time when omitted.",
+              "description": "Stable id; assigned as `m1`, `m2`, ... at load time when omitted. Shares one namespace\nwith participant and note ids; letters, digits, `_`, `.` and `-` only.",
+              "pattern": "^[A-Za-z0-9_.-]+$",
               "type": "string"
             },
             "kind": {
@@ -150,7 +153,8 @@
             },
             "id": {
               "default": "",
-              "description": "Stable id; assigned as `n1`, `n2`, ... at load time when omitted.",
+              "description": "Stable id; assigned as `n1`, `n2`, ... at load time when omitted. Shares one namespace\nwith participant and message ids; letters, digits, `_`, `.` and `-` only.",
+              "pattern": "^[A-Za-z0-9_.-]+$",
               "type": "string"
             },
             "over": {
@@ -233,8 +237,9 @@
       "description": "A sequence participant (lifeline).",
       "properties": {
         "id": {
-          "description": "Unique id within the diagram.",
+          "description": "Unique id within the diagram, shared with message and note ids: letters, digits, `_`, `.`\nand `-` only.",
           "minLength": 1,
+          "pattern": "^[A-Za-z0-9_.-]+$",
           "type": "string"
         },
         "kind": {

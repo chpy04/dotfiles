@@ -6,9 +6,15 @@ use std::fmt::Write;
 
 /// Export a diagram as Mermaid source (flowchart or sequenceDiagram).
 pub fn to_mermaid(d: &Diagram) -> String {
+    to_mermaid_opts(d, false)
+}
+
+/// Like [`to_mermaid`]; with `compat` the output also parses in Mermaid < 11, which lacks the
+/// `participant X@{ "type": ... }` syntax (database and queue participants become plain ones).
+pub fn to_mermaid_opts(d: &Diagram, compat: bool) -> String {
     match d {
         Diagram::Flowchart(f) => flowchart(f),
-        Diagram::Sequence(s) => sequence(s),
+        Diagram::Sequence(s) => sequence(s, compat),
     }
 }
 
@@ -133,7 +139,7 @@ fn flowchart(f: &Flowchart) -> String {
     out
 }
 
-fn sequence(s: &Sequence) -> String {
+fn sequence(s: &Sequence, compat: bool) -> String {
     let ids = safe_ids(s.participants.iter().map(|p| p.id.as_str()));
     let id = |raw: &str| ids.get(raw).cloned().unwrap_or_else(|| raw.to_string());
     let mut out = String::from("sequenceDiagram\n");
@@ -142,10 +148,10 @@ fn sequence(s: &Sequence) -> String {
         let l = escape_label(&p.label);
         let line = match p.kind {
             Some(ParticipantKind::Actor) => format!("actor {pid} as {l}"),
-            Some(ParticipantKind::Database) => {
+            Some(ParticipantKind::Database) if !compat => {
                 format!("participant {pid}@{{ \"type\": \"database\" }} as {l}")
             }
-            Some(ParticipantKind::Queue) => {
+            Some(ParticipantKind::Queue) if !compat => {
                 format!("participant {pid}@{{ \"type\": \"queue\" }} as {l}")
             }
             _ => format!("participant {pid} as {l}"),

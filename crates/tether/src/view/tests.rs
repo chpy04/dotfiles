@@ -999,3 +999,137 @@ fn footer_hints_follow_the_diagram_type() {
     assert!(ft.contains("hjkl move · ⏎ code · tab details · ␣ac ask"), "{ft}");
     assert!(st.contains("j/k message · h/l participant · ⏎ code · tab details · ␣ac ask"), "{st}");
 }
+
+// ------------------------------------------------------------------------------------ phase 4: sequence polish
+
+fn cell_text(buf: &Buffer, y: u16) -> String {
+    (0..buf.area.width).map(|x| buf[(x, y)].symbol().to_string()).collect::<Vec<_>>().join("")
+}
+
+#[test]
+fn focused_message_has_accent_arrow_bold_label_and_code_hint() {
+    let wt = worktree();
+    let theme = Theme::default();
+    let mut app = app_for(fixture("login_sequence"), wt.path(), false, (110, 40));
+    app.set_focus(id("m2"));
+    let buf = full(&mut app);
+    let o = app.layout.object("m2").unwrap().clone();
+    let lr = o.label_rect.unwrap();
+    let (x, y) = screen_of(&app, lr.x, lr.y);
+    assert_eq!(rgb(buf[(x, y)].fg), r3(theme.accent), "label is accent colored");
+    assert!(buf[(x, y)].modifier.contains(Modifier::BOLD), "label is bold");
+    assert!(cell_text(&buf, y).contains("⏎ code"), "{}", cell_text(&buf, y));
+    // an unfocused linked message has neither the hint nor the accent
+    let o1 = app.layout.object("m1").unwrap().clone();
+    let lr1 = o1.label_rect.unwrap();
+    let (x1, y1) = screen_of(&app, lr1.x, lr1.y);
+    assert!(!cell_text(&buf, y1).contains("⏎ code"));
+    assert_ne!(rgb(buf[(x1, y1)].fg), r3(theme.accent));
+    assert!(!buf[(x1, y1)].modifier.contains(Modifier::BOLD));
+    // a message without a code link gets no hint even when focused
+    app.set_focus(id("db_ret"));
+    let buf = full(&mut app);
+    let o = app.layout.object("db_ret").unwrap().clone();
+    let (_, y) = screen_of(&app, o.label_rect.unwrap().x, o.label_rect.unwrap().y);
+    assert!(!cell_text(&buf, y).contains("⏎ code"));
+}
+
+#[test]
+fn details_badges_on_messages_and_notes_and_tab_expands_notes() {
+    let wt = worktree();
+    let mut app = app_for(fixture("login_sequence"), wt.path(), false, (110, 40));
+    let buf = full(&mut app);
+    let text = buffer_to_text(&buf);
+    let m2 = app.layout.object("m2").unwrap();
+    let b = m2.decor.badge.expect("message with details has a badge");
+    let (bx, by) = screen_of(&app, b.x, b.y);
+    assert_eq!(buf[(bx, by)].symbol(), "+");
+    assert_eq!(buf[(bx + 1, by)].symbol(), "2");
+    let n1 = app.layout.object("n1").unwrap();
+    let nb = n1.decor.badge.expect("note with details has a badge");
+    let (nx, ny) = screen_of(&app, nb.x, nb.y);
+    assert_eq!((buf[(nx, ny)].symbol(), buf[(nx + 1, ny)].symbol()), ("+", "1"), "{text}");
+    // m1 has no details -> no badge
+    assert!(app.layout.object("m1").unwrap().decor.badge.is_none());
+    // Tab on the note expands it (panel appears, note's badge stays), Tab again collapses
+    app.set_focus(id("n1"));
+    keys(&mut app, "<tab>");
+    assert!(app.expanded.contains(&id("n1")));
+    let panel = app.layout.details_of("n1").expect("note panel").rect;
+    let note = app.layout.object("n1").unwrap().rect;
+    assert!(!panel.intersects(&note));
+    // lifelines break around the note's panel too
+    let ll = app.layout.lifelines.iter().find(|l| l.breaks.iter().any(|&(a, b)| a <= panel.y && b >= panel.bottom().saturating_sub(1)));
+    assert!(ll.is_some(), "some lifeline is broken across the panel rows");
+    keys(&mut app, "<tab>");
+    assert!(app.layout.details_of("n1").is_none());
+}
+
+#[test]
+fn sequence_stale_links_are_marked_on_messages() {
+    let wt = worktree();
+    let theme = Theme::default();
+    std::fs::write(wt.path().join("src/auth/verify.ts"), "nothing here\n").unwrap();
+    let mut app = app_for(fixture("login_sequence"), wt.path(), false, (110, 40));
+    app.set_focus(id("m2"));
+    let buf = full(&mut app);
+    assert_eq!(app.link_state(&id("m2")), Some(Resolved::Stale));
+    let c = app.layout.object("m2").unwrap().decor.code.unwrap();
+    let (x, y) = screen_of(&app, c.x, c.y);
+    assert_eq!(buf[(x, y)].symbol(), "!");
+    assert_eq!(rgb(buf[(x, y)].bg), r3(theme.error));
+    assert!(cell_text(&buf, y).contains("stale link"), "focused stale message says so: {}", cell_text(&buf, y));
+    assert!(!cell_text(&buf, y).contains("⏎ code"));
+    // m1 is still fine
+    assert_eq!(app.link_state(&id("m1")), Some(Resolved::Exact(14)));
+}
+
+#[test]
+fn moved_links_show_the_new_line_in_the_details_panel_code_section() {
+    let wt = worktree();
+    // flowchart: `check` has details and a code link at L142; shift the file by 7 lines
+    let src = std::fs::read_to_string(wt.path().join("src/auth/session.ts")).unwrap();
+    std::fs::write(wt.path().join("src/auth/session.ts"), format!("{}{src}", "// new\n".repeat(7))).unwrap();
+    let mut app = app_for(fixture("prd_flowchart"), wt.path(), false, (100, 30));
+    keys(&mut app, "<tab>");
+    let text = buffer_to_text(&full(&mut app));
+    assert_eq!(app.link_state(&id("check")), Some(Resolved::Moved(149)));
+    assert!(text.contains("session.ts:149"), "{text}");
+    assert!(text.contains("moved from L142"), "{text}");
+    assert!(!text.contains("session.ts:142"), "the stale stored line is not shown\n{text}");
+
+    // sequence: m2 (verify.ts:31) shifted by 3
+    let src = std::fs::read_to_string(wt.path().join("src/auth/verify.ts")).unwrap();
+    std::fs::write(wt.path().join("src/auth/verify.ts"), format!("{}{src}", "// new\n".repeat(3))).unwrap();
+    let mut app = app_for(fixture("login_sequence"), wt.path(), false, (110, 40));
+    app.set_focus(id("m2"));
+    app.set_expanded(&[id("m2")]).unwrap();
+    let text = buffer_to_text(&full(&mut app));
+    assert_eq!(app.link_state(&id("m2")), Some(Resolved::Moved(34)));
+    assert!(text.contains("verify.ts:34") && text.contains("moved from L31"), "{text}");
+
+    // an exact link keeps the stored text and no note
+    let wt2 = worktree();
+    let mut app = app_for(fixture("login_sequence"), wt2.path(), false, (110, 40));
+    app.set_focus(id("m2"));
+    app.set_expanded(&[id("m2")]).unwrap();
+    let text = buffer_to_text(&full(&mut app));
+    assert!(text.contains("verify.ts:31") && !text.contains("moved from"), "{text}");
+}
+
+#[test]
+fn moving_the_focus_never_retargets_neovim_only_enter_does() {
+    let wt = worktree();
+    let mut app = app_for(fixture("prd_flowchart"), wt.path(), false, (100, 30));
+    for script in ["j", "k", "l", "h", "gG", "<tab>", "<tab>", "/ref<cr>", "<esc>"] {
+        let fx = keys(&mut app, script);
+        assert!(!fx.iter().any(|e| matches!(e, Effect::OpenCode { .. })), "{script:?} produced {fx:?}");
+    }
+    let mut seq = app_for(fixture("login_sequence"), wt.path(), false, (110, 40));
+    for script in ["j", "j", "k", "l", "h", "<tab>"] {
+        let fx = keys(&mut seq, script);
+        assert!(!fx.iter().any(|e| matches!(e, Effect::OpenCode { .. })), "{script:?} produced {fx:?}");
+    }
+    let fx = keys(&mut app, "<cr>");
+    assert!(fx.iter().any(|e| matches!(e, Effect::OpenCode { .. })) || app.link_state(&app.focus.clone()).is_none());
+}

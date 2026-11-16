@@ -21,3 +21,4 @@ render prd_flowchart prd_flowchart check
 render prd_flowchart_expanded prd_flowchart check check
 render session_refresh_30 session_refresh_30 check
 render login_sequence login_sequence m2 m2
+render skill_flowchart_expanded skill_example check check

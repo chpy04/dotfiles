@@ -441,9 +441,11 @@ pub(super) fn layout_flowchart(
     }
 
     // ---------------------------------------------------------------- 3c. ports
-    // (sort key, edge, is_from_end)
-    let mut low: Vec<Vec<(i64, usize, bool)>> = vec![Vec::new(); nodes.len()];
-    let mut high: Vec<Vec<(i64, usize, bool)>> = vec![Vec::new(); nodes.len()];
+    // (cross position of the far end, rank of the far end, edge, is_from_end): ports on a side
+    // are ordered by where the edge heads (departures) or comes from (arrivals) across the flow,
+    // ties by the far end's rank, so that the lines leaving a side do not have to cross.
+    let mut low: Vec<Vec<(i64, usize, usize, bool)>> = vec![Vec::new(); nodes.len()];
+    let mut high: Vec<Vec<(i64, usize, usize, bool)>> = vec![Vec::new(); nodes.len()];
     const BIG: i64 = 1_000_000;
     for (ei, e) in edges.iter().enumerate() {
         let (s, t) = (e.s, e.t);
@@ -452,17 +454,17 @@ pub(super) fn layout_flowchart(
             Kind::Fwd => {
                 let first = e.virt.first().copied().unwrap_or_else(|| nodes[t].nc());
                 let last = e.virt.last().copied().unwrap_or_else(|| nodes[s].nc());
-                low[s].push((first as i64, ei, true));
-                high[t].push((last as i64, ei, false));
+                low[s].push((first as i64, nodes[t].rank, ei, true));
+                high[t].push((last as i64, nodes[s].rank, ei, false));
             }
             Kind::Back => {
                 let side = if e.right { BIG } else { -BIG };
-                low[s].push((side + nodes[t].nc() as i64, ei, true));
-                high[t].push((side + nodes[s].nc() as i64, ei, false));
+                low[s].push((side + nodes[t].nc() as i64, nodes[t].rank, ei, true));
+                high[t].push((side + nodes[s].nc() as i64, nodes[s].rank, ei, false));
             }
             Kind::Same => {
-                low[s].push((nodes[t].nc() as i64, ei, true));
-                low[t].push((nodes[s].nc() as i64, ei, false));
+                low[s].push((nodes[t].nc() as i64, nodes[t].rank, ei, true));
+                low[t].push((nodes[s].nc() as i64, nodes[s].rank, ei, false));
             }
         }
     }
@@ -473,7 +475,7 @@ pub(super) fn layout_flowchart(
             l.sort();
             let n = &nodes[ni];
             let cells = port_cells(n.b0, n.nb, l.len());
-            for (k, (_, ei, from_end)) in l.iter().enumerate() {
+            for (k, (_, _, ei, from_end)) in l.iter().enumerate() {
                 if *from_end {
                     edges[*ei].p_from = cells[k];
                 } else {
@@ -877,59 +879,128 @@ fn port_cells(b0: i32, nb: i32, n: usize) -> Vec<i32> {
         .collect()
 }
 
-/// Greedy lane assignment for one channel (see module docs). Returns the lane (>= 1) of every
-/// segment and the highest lane used.
+/// Crossings made inside one channel when segment `i` runs on a lane above segment `j`:
+/// `j`'s top-anchored verticals pass through `i`'s lane, and `i`'s bottom-anchored verticals
+/// pass through `j`'s lane. A vertical on an end column of the other run is a corner, not a
+/// crossing (shared columns are ordered by [`must_above`]).
+fn cross_if_above(i: &Seg, j: &Seg) -> i64 {
+    let inside = |c: i32, s: &Seg| c > s.lo() && c < s.hi();
+    let mut n = 0;
+    for (c, a) in j.ends() {
+        if a == Anchor::Top && inside(c, i) {
+            n += 1;
+        }
+    }
+    for (c, a) in i.ends() {
+        if a == Anchor::Bottom && inside(c, j) {
+            n += 1;
+        }
+    }
+    n
+}
+
+/// `i` must lie above `j` when a Top-anchored end of `i` shares a column with a Bottom-anchored
+/// end of `j` (their verticals would otherwise overlap).
+fn must_above(i: &Seg, j: &Seg) -> bool {
+    i.ends().iter().any(|&(ci, ai)| {
+        ai == Anchor::Top
+            && j.ends()
+                .iter()
+                .any(|&(cj, aj)| aj == Anchor::Bottom && cj == ci)
+    })
+}
+
+/// Cost of an ordering violating a hard constraint (dwarfs any crossing count).
+const VIOLATION: i64 = 10_000;
+
+/// Lane assignment for one channel (see module docs). Returns the lane (>= 1) of every segment
+/// and the highest lane used.
+///
+/// Segments are first put in a top-to-bottom order that minimises the crossings between their
+/// horizontal runs and each other's verticals ([`cross_if_above`]) while honouring the hard
+/// "shares a column" constraints ([`must_above`]): greedy construction, then insertion moves
+/// until no move helps. Lanes are then handed out in that order; runs that do not overlap may
+/// share a lane.
 fn assign_lanes(segs: &[Seg]) -> (Vec<i32>, i32) {
     let n = segs.len();
-    let mut lane = vec![0i32; n];
-    let mut done = vec![false; n];
-    let mut preds: Vec<Vec<usize>> = vec![Vec::new(); n];
+    if n == 0 {
+        return (Vec::new(), 0);
+    }
+    // cost[i][j]: price of putting i above j
+    let mut cost = vec![vec![0i64; n]; n];
     for i in 0..n {
         for j in 0..n {
-            if i == j {
-                continue;
-            }
-            // i must lie above j when a Top-anchored end of i shares a column with a
-            // Bottom-anchored end of j (their verticals would otherwise overlap).
-            let must = segs[i].ends().iter().any(|&(ci, ai)| {
-                ai == Anchor::Top
-                    && segs[j]
-                        .ends()
-                        .iter()
-                        .any(|&(cj, aj)| aj == Anchor::Bottom && cj == ci)
-            });
-            if must {
-                preds[j].push(i);
+            if i != j {
+                cost[i][j] = cross_if_above(&segs[i], &segs[j])
+                    + if must_above(&segs[j], &segs[i]) { VIOLATION } else { 0 };
             }
         }
     }
-    let mut maxl = 0;
-    for _ in 0..n {
-        let ready = (0..n)
-            .filter(|&k| !done[k] && preds[k].iter().all(|&p| done[p]))
-            .min_by_key(|&k| (segs[k].lo(), k));
-        let k = ready.unwrap_or_else(|| (0..n).find(|&k| !done[k]).unwrap());
-        let mut l = preds[k]
+    // greedy: repeatedly take the segment that is cheapest to put above everything left
+    let mut order: Vec<usize> = Vec::with_capacity(n);
+    let mut left: Vec<usize> = (0..n).collect();
+    while !left.is_empty() {
+        let (pos, _) = left
             .iter()
-            .filter(|&&p| done[p])
-            .map(|&p| lane[p] + 1)
-            .max()
-            .unwrap_or(1)
-            .max(1);
-        loop {
-            let clash = (0..n).any(|o| {
-                done[o]
-                    && lane[o] == l
-                    && segs[o].lo() <= segs[k].hi() + 1
-                    && segs[k].lo() <= segs[o].hi() + 1
-            });
-            if !clash {
-                break;
+            .enumerate()
+            .min_by_key(|&(_, &k)| {
+                let net: i64 = left
+                    .iter()
+                    .filter(|&&o| o != k)
+                    .map(|&o| cost[k][o] - cost[o][k])
+                    .sum();
+                (net, segs[k].lo(), k)
+            })
+            .unwrap();
+        order.push(left.remove(pos));
+    }
+    // insertion moves
+    for _ in 0..(2 * n + 4) {
+        let mut improved = false;
+        for k in 0..n {
+            let cur = order.iter().position(|&x| x == k).unwrap();
+            let rest: Vec<usize> = order.iter().copied().filter(|&x| x != k).collect();
+            // price of k at insertion point p (0..=rest.len()): everything before is above k
+            let mut after: i64 = rest.iter().map(|&o| cost[k][o]).sum();
+            let mut before = 0i64;
+            let mut best = (after, 0usize);
+            for (p, &o) in rest.iter().enumerate() {
+                before += cost[o][k];
+                after -= cost[k][o];
+                if before + after < best.0 {
+                    best = (before + after, p + 1);
+                }
             }
-            l += 1;
+            let cur_price = {
+                let before: i64 = rest[..cur].iter().map(|&o| cost[o][k]).sum();
+                let after: i64 = rest[cur..].iter().map(|&o| cost[k][o]).sum();
+                before + after
+            };
+            if best.0 < cur_price {
+                let mut next = rest;
+                next.insert(best.1, k);
+                order = next;
+                improved = true;
+            }
+        }
+        if !improved {
+            break;
+        }
+    }
+    // lanes in that order
+    let mut lane = vec![0i32; n];
+    let mut placed: Vec<usize> = Vec::with_capacity(n);
+    let mut maxl = 0;
+    for &k in &order {
+        let mut l = 1;
+        for &o in &placed {
+            let overlap = segs[o].lo() <= segs[k].hi() + 1 && segs[k].lo() <= segs[o].hi() + 1;
+            if overlap || must_above(&segs[o], &segs[k]) {
+                l = l.max(lane[o] + 1);
+            }
         }
         lane[k] = l;
-        done[k] = true;
+        placed.push(k);
         maxl = maxl.max(l);
     }
     (lane, maxl)

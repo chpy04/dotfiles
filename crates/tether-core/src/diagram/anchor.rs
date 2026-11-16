@@ -80,16 +80,17 @@ fn resolve_in_lines(code: &CodeRef, lines: &[&str], window: Option<usize>) -> Re
     if hit(stored) {
         return Resolved::Exact(code.line);
     }
-    let max = window.unwrap_or(usize::MAX).min(lines.len().max(stored));
-    for d in 1..=max {
-        if stored > d && hit(stored - d) {
-            return Resolved::Moved((stored - d) as u32);
-        }
-        if hit(stored + d) {
-            return Resolved::Moved((stored + d) as u32);
-        }
-    }
-    Resolved::Stale
+    // O(lines): scan the real line numbers only, never the distance range (the stored line may
+    // be arbitrarily far past EOF). Nearest wins, the earlier line on a tie.
+    let window = window.unwrap_or(usize::MAX);
+    lines
+        .iter()
+        .enumerate()
+        .filter(|(_, l)| l.contains(anchor))
+        .map(|(i, _)| i + 1)
+        .filter(|&l| l.abs_diff(stored) <= window)
+        .min_by_key(|&l| (l.abs_diff(stored), l))
+        .map_or(Resolved::Stale, |l| Resolved::Moved(l as u32))
 }
 
 #[cfg(test)]
@@ -186,6 +187,23 @@ mod tests {
         file(d.path(), &numbered(10, &[(4, "target")]));
         assert_eq!(
             resolve(&cr(99, Some("target")), d.path()),
+            Resolved::Moved(4)
+        );
+    }
+
+    #[test]
+    fn huge_stored_line_is_bounded_by_the_file() {
+        let d = tempfile::tempdir().unwrap();
+        file(d.path(), &numbered(50, &[]));
+        let t = std::time::Instant::now();
+        assert_eq!(
+            resolve(&cr(u32::MAX, Some("missing anchor")), d.path()),
+            Resolved::Stale
+        );
+        assert!(t.elapsed() < std::time::Duration::from_millis(100), "{:?}", t.elapsed());
+        file(d.path(), &numbered(50, &[(4, "target")]));
+        assert_eq!(
+            resolve(&cr(u32::MAX, Some("target")), d.path()),
             Resolved::Moved(4)
         );
     }

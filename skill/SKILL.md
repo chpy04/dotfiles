@@ -87,7 +87,7 @@ Make a diagram when the user wants to *understand how something works* and the a
 
 ### Always link the code, with an anchor
 
-Every node, message or note that maps to code gets `"code": {"path", "line", "anchor"}`. `path` is relative to the worktree root, `line` is 1-based (optional `end_line` for a range). **Always add `anchor`**: a short, distinctive snippet copied from that line (`"token.expiresAt <"`, `"router.post('/login'"`). The viewer re-finds the line by its anchor when the code shifts, and marks the link *stale* (and refuses to jump to a wrong line) when the snippet is gone. Read the file first so that line numbers and anchors are real; never guess them. Only leave `code` out for elements that really have no code (an external system, "user clicks submit").
+Every node, message or note that maps to code gets `"code": {"path", "line", "anchor"}`. `path` is relative to the worktree root, `line` is 1-based (optional `end_line` for a range). **Always add `anchor`**: a short, distinctive snippet copied from that line (`"token.expiresAt <"`, `"router.post('/login'"`). The viewer re-finds the line by its anchor when the code shifts, and marks the link *stale* (and refuses to jump to a wrong line) when the snippet is gone. Read the file first so that line numbers and anchors are real; never guess or count them by eye: run `grep -n "<anchor>" <file>` and use the line it prints, so `line` is exactly the line that contains the anchor text (for a multi-line statement, the line where the anchor text is). Only leave `code` out for elements that really have no code (an external system, "user clicks submit").
 
 ### Put the detail in `details`
 
@@ -120,7 +120,7 @@ JSON Schemas are published in the repo: `schema/flowchart.schema.json` and `sche
 }
 ```
 
-`shape`: `process` (default), `decision`, `terminal` (start/end), `io`, `subroutine`, `database`. `direction`: `TB` (default) or `LR`. `style`: `solid` (default) or `dashed` (use for async, optional or fallback paths). Edge `label` is optional but use it on every branch out of a decision. Node `id`s are yours: short, stable, unique.
+`shape`: `process` (default), `decision`, `terminal` (start/end), `io`, `subroutine`, `database`. `direction`: `TB` (default) or `LR`. `style`: `solid` (default) or `dashed` (use for async, optional or fallback paths). Edge `label` is optional but use it on every branch out of a decision. Node `id`s are yours: short, stable, unique, and only letters, digits, `_`, `.` and `-` (sequence participant, message and note ids share one namespace).
 
 ### Sequence example
 
@@ -165,10 +165,12 @@ tether diagram list [--json]                   # diagrams stored in this worktre
 tether diagram show <id>                       # the stored spec as JSON
 tether diagram update <id> spec.json           # replace the spec (validated), same id
 tether diagram export <id> --mermaid           # Mermaid source on stdout
+tether diagram export <id> --mermaid --compat  # plain `participant` lines for Mermaid before v11
 tether diagram delete <id>
 tether view <id> [--placement tab|split|here]  # (re)open the viewer
 ```
 
+- Simplest and most reliable: one command with the spec inline, no temp file: `tether diagram create - <<'EOF'` then the JSON, then `EOF` (quote the `'EOF'`). Never run a bare `cat` or any other command that waits on stdin before it: the Bash tool would hang.
 - `create` validates, stores the spec in `.tether/diagrams/<id>.json` in the worktree (gitignored) and prints the id. By default (`--open tab`, or the user's `[placement] diagram` config) it opens a **new tab named after the title** running the viewer, in the background; the tab is tether-made, so you may close or rename it later. The viewer pane closes when the user presses `q`.
 - `--open split` puts the viewer in a split to the right of your pane (or `--pane <id>`): use it when the user says "next to the chat". `--open none` only stores it. `--open here` runs the viewer in your own pane: never do this from the primary agent's pane.
 - Run `tether layout` first, like for any tab. Do not pass `--focus` unless the user should look right now.

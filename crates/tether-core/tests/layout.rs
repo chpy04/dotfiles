@@ -281,6 +281,85 @@ fn flowchart_30_expanded_has_clean_geometry() {
     }
 }
 
+/// Crossing counts (perpendicular sharing of a cell by two edges) per fixture and expansion
+/// set, with the Graphviz engine. The first number of each row is the count before the port and
+/// lane ordering work (review fix 4, F3.5); the count may not get worse, and the small
+/// documented examples must reach 0.
+fn crossing_cases() -> Vec<(&'static str, &'static str, Vec<&'static str>, usize)> {
+    vec![
+        ("session_refresh_30", "collapsed", vec![], CROSS_SESSION_COLLAPSED),
+        ("session_refresh_30", "check", vec!["check"], CROSS_SESSION_CHECK),
+        (
+            "session_refresh_30",
+            "check+load_session",
+            vec!["check", "load_session"],
+            CROSS_SESSION_CHECK_LOAD,
+        ),
+        (
+            "session_refresh_30",
+            "verify_sig+lock+audit",
+            vec!["verify_sig", "lock", "audit"],
+            CROSS_SESSION_THREE,
+        ),
+        (
+            "session_refresh_30",
+            "all expandable",
+            EXPANDABLE.to_vec(),
+            CROSS_SESSION_ALL,
+        ),
+        ("prd_flowchart", "collapsed", vec![], CROSS_PRD),
+        ("skill_example", "collapsed", vec![], 0),
+        ("skill_example", "check", vec!["check"], 0),
+    ]
+}
+
+// Upper bounds. Counts before the lane/port ordering fix (review fix 4): collapsed 3, check 5,
+// check+load_session 5, verify_sig+lock+audit 7, all expandable 11, prd 0, skill example 0 / 2
+// (check expanded). Now 3/3/3/3/3/0/0/0; the bounds hold the new values.
+const CROSS_SESSION_COLLAPSED: usize = 3;
+const CROSS_SESSION_CHECK: usize = 3;
+const CROSS_SESSION_CHECK_LOAD: usize = 3;
+const CROSS_SESSION_THREE: usize = 3;
+const CROSS_SESSION_ALL: usize = 3;
+const CROSS_PRD: usize = 0;
+const CROSS_LR: usize = 4;
+const CROSS_LR_EXP: usize = 4;
+const CROSS_NAIVE: usize = 10;
+
+#[test]
+fn crossing_report() {
+    for (name, what, set, max) in crossing_cases() {
+        let d = load(name);
+        let l = run(&d, &set, Engine::Dot);
+        let m = assert_flow_quality(&l, &format!("{name} {what}"));
+        eprintln!("CROSSINGS {name} [{what}]: {}", m.crossings);
+        assert!(
+            m.crossings <= max,
+            "{name} [{what}]: {} crossings, expected at most {max}",
+            m.crossings
+        );
+    }
+}
+
+/// Same measurement for left-to-right flowcharts and the naive engine.
+#[test]
+fn crossing_report_lr_and_naive() {
+    let src = std::fs::read_to_string(diagrams_dir().join("session_refresh_30.json")).unwrap();
+    let lr = load_src(&src.replace("\"direction\": \"TB\"", "\"direction\": \"LR\""));
+    let tb = load("session_refresh_30");
+    let rows: Vec<(&str, &Diagram, Vec<&str>, Engine, usize)> = vec![
+        ("LR collapsed", &lr, vec![], Engine::Dot, CROSS_LR),
+        ("LR check+lock", &lr, vec!["check", "lock"], Engine::Dot, CROSS_LR_EXP),
+        ("naive collapsed", &tb, vec![], Engine::Naive, CROSS_NAIVE),
+    ];
+    for (what, d, set, engine, max) in rows {
+        let l = run(d, &set, engine);
+        let m = assert_flow_quality(&l, what);
+        eprintln!("CROSSINGS {what}: {}", m.crossings);
+        assert!(m.crossings <= max, "{what}: {} crossings, expected at most {max}", m.crossings);
+    }
+}
+
 #[test]
 fn expansion_attaches_panel_beside_owner_and_makes_room() {
     let d = load("session_refresh_30");

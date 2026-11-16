@@ -5,7 +5,8 @@ set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 PLUGIN="$(cd "$HERE/.." && pwd)"
 T="$(mktemp -d "${TMPDIR:-/tmp}/tr.XXXXXX")"; T="${T%/}"
-trap 'rm -rf "$T"' EXIT
+# the "live owner" nvim started below can outlive `kill $OWNER` (nvim re-execs); reap it by its socket path
+trap 'pkill -f "listen $T/" 2>/dev/null; rm -rf "$T"' EXIT
 pass=0; fail=0
 ok()  { pass=$((pass+1)); echo "  ok   $1"; }
 bad() { fail=$((fail+1)); echo "  FAIL $1 :: $2"; }
