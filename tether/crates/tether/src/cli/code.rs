@@ -30,8 +30,9 @@ pub struct OpenArgs {
     /// Pane to split when no Neovim exists yet (default: the current pane)
     #[arg(long, value_name = "PANE")]
     pub from: Option<String>,
-    /// Also show the file side by side against this git revision (branch, tag, commit, HEAD~1, ...).
-    /// For this open only: the next open without --diff closes that diff view
+    /// Make that Neovim compare against this git revision (branch, tag, commit, HEAD~1, ...):
+    /// gitsigns signs/hunks and the neo-tree git status, for all its files. In memory only; the
+    /// next open without --diff restores the default
     #[arg(long, value_name = "REV")]
     pub diff: Option<String>,
     /// Move focus to the Neovim pane (default: do not steal focus)

@@ -9,7 +9,7 @@
           "type": "string"
         },
         "diff": {
-          "description": "Optional git revision (branch, tag or commit, e.g. `main`) to diff the file against when the\nlink is opened. Omit it to open the file normally.",
+          "description": "Optional git revision (branch, tag or commit, e.g. `main`) that Neovim's git signs and file\ntree compare against when the link is opened. Omit it to open the file normally.",
           "minLength": 1,
           "type": "string"
         },

@@ -327,35 +327,20 @@ pub fn exec_lua(sock: &Path, code: &str, args: serde_json::Value, timeout: Durat
 }
 
 /// Lua for the jump (recipe from `spike/nvim-jump.sh`, plus an optional line-range highlight and an
-/// optional diff against a git revision).
-/// Args: `[abs_file, line, end_line_or_null, diff_or_null]` with `diff` = [`DiffBase`].
+/// optional git base).
+/// Args: `[abs_file, line, end_line_or_null, base_or_null]` with `base` = [`DiffBase`].
 /// Returns `"<file as nvim knows it>:<line>"`.
 ///
-/// The diff is scoped to this one jump: every jump first closes the diff view an earlier jump made
-/// (only windows tether marked, in the current tab page) and resets the gitsigns base it set on a
-/// buffer, so a jump without a diff always leaves the editor in its default state.
+/// The git base applies to this Neovim as a whole, in memory only: gitsigns (signs, line
+/// highlights, hunk preview/navigation/reset) and neo-tree's git status compare against the base
+/// commit instead of the index, for every buffer and tree. A jump without a base restores what was
+/// there before tether set one, so the default is never changed; nothing is written to config.
+/// Both integrations are optional: without gitsigns or neo-tree the base is just recorded in
+/// `vim.g.tether_git_base`.
 pub const JUMP_LUA: &str = r#"
 local a = ...
 local d = a[4]
 if d == vim.NIL then d = nil end
-local function gitsigns() return package.loaded.gitsigns end
--- undo the previous tether diff (ours only: marked windows and buffers)
-for _, w in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
-  if vim.w[w].tether_diff_base and #vim.api.nvim_tabpage_list_wins(0) > 1 then pcall(vim.api.nvim_win_close, w, true) end
-end
-for _, w in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
-  if vim.w[w].tether_diff_work then
-    pcall(vim.api.nvim_win_call, w, function() vim.cmd("diffoff") end)
-    vim.w[w].tether_diff_work = nil
-  end
-end
-for _, nr in ipairs(vim.api.nvim_list_bufs()) do
-  if vim.api.nvim_buf_is_loaded(nr) and vim.b[nr].tether_diff_rev then
-    vim.b[nr].tether_diff_rev = nil
-    local gs = gitsigns()
-    if gs then pcall(vim.api.nvim_buf_call, nr, function() gs.change_base(nil, false) end) end
-  end
-end
 local f = vim.fn.resolve(vim.fn.fnamemodify(a[1], ":p"))
 -- compare normalized names; vim.fn.bufnr(f) treats `[slug]` etc. as a glob pattern
 local b = -1
@@ -383,67 +368,99 @@ if type(e) == "number" and e > n then
     if vim.api.nvim_buf_is_valid(buf) then vim.api.nvim_buf_clear_namespace(buf, ns, 0, -1) end
   end, 4000)
 end
-if d then
-  local work = vim.api.nvim_get_current_win()
-  local ft = vim.bo[buf].filetype
-  vim.cmd("leftabove vertical new")
-  local base = vim.api.nvim_get_current_buf()
-  vim.bo[base].buftype = "nofile"
-  vim.bo[base].bufhidden = "wipe"
-  vim.bo[base].swapfile = false
-  local text = d.text
-  if text == vim.NIL then text = nil end
-  local lines = text and vim.split(text, "\n", { plain = true }) or {}
-  if text and lines[#lines] == "" then table.remove(lines) end
-  vim.api.nvim_buf_set_lines(base, 0, -1, false, lines)
-  vim.bo[base].modifiable = false
-  vim.bo[base].filetype = ft
-  pcall(vim.api.nvim_buf_set_name, base, ("tether://%s/%s"):format(d.rev, d.rel))
-  vim.w.tether_diff_base = true
-  vim.wo.winbar = text and ("%s (%s)"):format(d.rev, d.short) or ("%s (%s): file not in this revision"):format(d.rev, d.short)
-  vim.cmd("diffthis")
-  vim.api.nvim_set_current_win(work)
-  vim.w.tether_diff_work = true
-  vim.cmd("diffthis")
-  vim.b[buf].tether_diff_rev = d.rev
-  -- gitsigns (when installed) attaches to a fresh buffer asynchronously: retry until it has, and
-  -- stop if a newer jump replaced or cleared this diff meanwhile
-  local tries = 0
-  local function set_gs_base()
-    local gs = gitsigns()
-    if not gs or not vim.api.nvim_buf_is_valid(buf) or vim.b[buf].tether_diff_rev ~= d.rev then return end
-    if vim.b[buf].gitsigns_status_dict then
-      pcall(vim.api.nvim_buf_call, buf, function() gs.change_base(d.sha, false) end)
-    elseif tries < 20 then
-      tries = tries + 1
-      vim.defer_fn(set_gs_base, 150)
+
+-- git base: set, switch or clear it for this whole Neovim (only when it changes)
+local prev = vim.g.tether_git_base
+local want = d and { rev = d.rev, sha = d.sha, short = d.short, root = d.root } or nil
+local same = (prev == nil and want == nil) or (prev and want and prev.sha == want.sha and prev.root == want.root)
+
+-- neo-tree: every source state gets the base for its worktree (and the tether-set one removed);
+-- trees opened later pick it up through the FileType autocmd below
+local function tree_apply()
+  if not package.loaded["neo-tree"] then return end
+  local ok, manager = pcall(require, "neo-tree.sources.manager")
+  if not ok then return end
+  local g = vim.g.tether_git_base
+  for _, src in ipairs({ "filesystem", "git_status", "buffers" }) do
+    pcall(manager._for_each_state, src, function(state)
+      state.git_base_by_worktree = state.git_base_by_worktree or {}
+      if state.tether_git_root then
+        state.git_base_by_worktree[state.tether_git_root] = nil
+        state.tether_git_root = nil
+      end
+      if g then
+        state.git_base_by_worktree[g.root] = g.sha
+        state.tether_git_root = g.root
+      end
+    end)
+    pcall(manager.refresh, src)
+  end
+end
+
+if not same then
+  vim.g.tether_git_base = want
+  -- gitsigns: global base (all buffers, and new ones); remember the user's own base to restore it
+  local ok, gs = pcall(require, "gitsigns")
+  if ok and gs then
+    local cfg_ok, cfg = pcall(require, "gitsigns.config")
+    if want then
+      if vim.g.tether_gs_orig == nil then
+        vim.g.tether_gs_orig = (cfg_ok and cfg.config.base) or false
+      end
+      pcall(gs.change_base, want.sha, true)
+    elseif vim.g.tether_gs_orig ~= nil then
+      pcall(gs.change_base, vim.g.tether_gs_orig or nil, true)
+      vim.g.tether_gs_orig = nil
     end
   end
-  set_gs_base()
-  vim.api.nvim_win_set_cursor(work, { n, 0 })
-  vim.cmd("normal! zvzz")
+  tree_apply()
+  vim.api.nvim_create_autocmd("FileType", {
+    group = vim.api.nvim_create_augroup("TetherGitBase", { clear = true }),
+    pattern = "neo-tree",
+    callback = function() vim.schedule(tree_apply) end,
+    desc = "tether: apply the git base to new neo-tree states",
+  })
+  local msg = want and ("tether: git base is %s (%s): signs, hunks and the file tree compare against it"):format(want.rev, want.short)
+    or "tether: git base back to the default"
+  vim.schedule(function() vim.notify(msg, vim.log.levels.INFO, { title = "tether" }) end)
+end
+-- a freshly opened buffer may still be attaching to gitsigns while the global base changes:
+-- once it has attached, make sure it uses the current base too
+if want then
+  local tries = 0
+  local function settle()
+    local gs = package.loaded.gitsigns
+    local g = vim.g.tether_git_base
+    if not gs or not g or g.sha ~= want.sha or not vim.api.nvim_buf_is_valid(buf) then return end
+    if vim.b[buf].gitsigns_status_dict then
+      pcall(vim.api.nvim_buf_call, buf, function() gs.change_base(want.sha, false) end)
+    elseif tries < 20 then
+      tries = tries + 1
+      vim.defer_fn(settle, 150)
+    end
+  end
+  settle()
 end
 return vim.fn.expand("%:p") .. ":" .. n
 "#;
 
-/// What to diff the opened file against (see [`JUMP_LUA`]).
+/// The git revision a Neovim compares against (see [`JUMP_LUA`]).
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct DiffBase {
-    /// The revision as given (`main`, `HEAD~3`, a sha); shown in the diff window.
+    /// The revision as given (`main`, `HEAD~3`, a sha); shown in the notification.
     pub rev: String,
     /// The full commit it resolved to.
     pub sha: String,
     /// Abbreviated commit, for display.
     pub short: String,
-    /// The file's path relative to the worktree root.
-    pub rel: String,
-    /// The file's content at `sha`; `None` when the file does not exist in that revision.
-    pub text: Option<String>,
+    /// The worktree root exactly as `git rev-parse --show-toplevel` prints it (neo-tree's key).
+    pub root: String,
 }
 
 /// Jump the Neovim listening on `sock` to `file:line` (file must be absolute). `end_line` highlights
 /// the range for a few seconds. Returns `"<path>:<line>"` as Neovim reports it.
-/// `diff` opens a side-by-side diff against that revision (and closes any earlier tether diff).
+/// `diff` makes this Neovim compare against that revision (gitsigns + neo-tree); `None` restores
+/// the default if tether had set a base.
 pub fn jump(sock: &Path, file: &Path, line: u32, end_line: Option<u32>, diff: Option<&DiffBase>) -> Result<String, NvimError> {
     let args = serde_json::json!([[file.to_string_lossy(), line, end_line, diff]]);
     let v = exec_lua(sock, JUMP_LUA, args, RPC_TIMEOUT)?;
@@ -656,48 +673,26 @@ mod tests {
         assert_eq!(jump(&sock, &slug, 3, None, None).unwrap(), format!("{}:3", slug.display()));
         assert_eq!(jump(&sock, &plain, 4, None, None).unwrap(), format!("{}:4", plain.display()));
 
-        // --diff: a read-only base window on the left, both in diff mode, cursor in the working file
+        // --diff: no extra window; the base is recorded for the whole Neovim, switched, then cleared
         let eval = |code: &str| exec_lua(&sock, code, serde_json::json!([]), RPC_TIMEOUT).unwrap();
-        let base = DiffBase {
-            rev: "main".into(),
-            sha: "0".repeat(40),
-            short: "0000000".into(),
-            rel: "a.txt".into(),
-            text: Some((1..=100).map(|n| if n == 50 { "old 50\n".into() } else { format!("line {n}\n") }).collect()),
-        };
+        let state = r#"return { n = #vim.api.nvim_tabpage_list_wins(0), diff = vim.wo.diff, base = vim.g.tether_git_base }"#;
+        let base = DiffBase { rev: "main".into(), sha: "a".repeat(40), short: "aaaaaaa".into(), root: dir.display().to_string() };
         assert_eq!(jump(&sock, &file, 50, None, Some(&base)).unwrap(), format!("{}:50", file.display()));
-        let state = r#"
-            local wins = vim.api.nvim_tabpage_list_wins(0)
-            local out = { n = #wins, cur_diff = vim.wo.diff, base = nil }
-            for _, w in ipairs(wins) do
-              if vim.w[w].tether_diff_base then
-                local b = vim.api.nvim_win_get_buf(w)
-                out.base = { diff = vim.wo[w].diff, name = vim.api.nvim_buf_get_name(b), modifiable = vim.bo[b].modifiable,
-                             line50 = vim.api.nvim_buf_get_lines(b, 49, 50, false)[1],
-                             left = vim.fn.win_screenpos(w)[2] < vim.fn.win_screenpos(0)[2] }
-              end
-            end
-            return out"#;
         let v = eval(state);
-        assert_eq!(v["n"], 2, "{v}");
-        assert_eq!(v["cur_diff"], true, "{v}");
-        assert_eq!(v["base"]["diff"], true, "{v}");
-        assert_eq!(v["base"]["modifiable"], false, "{v}");
-        assert_eq!(v["base"]["line50"], "old 50", "{v}");
-        assert_eq!(v["base"]["left"], true, "{v}");
-        assert_eq!(v["base"]["name"], "tether://main/a.txt", "{v}");
-        // again with another revision: still exactly one diff (the old one is replaced)
-        let other = DiffBase { rev: "v1".into(), text: None, ..base.clone() };
+        assert_eq!((v["n"].clone(), v["diff"].clone()), (serde_json::json!(1), serde_json::json!(false)), "{v}");
+        assert_eq!(v["base"]["sha"], base.sha, "{v}");
+        assert_eq!(v["base"]["root"], base.root, "{v}");
+        // the base sticks for later jumps that also pass it, and to other files of this Neovim
+        assert_eq!(jump(&sock, &plain, 1, None, Some(&base)).unwrap(), format!("{}:1", plain.display()));
+        assert_eq!(eval(state)["base"]["rev"], "main");
+        let other = DiffBase { rev: "v1".into(), sha: "b".repeat(40), ..base.clone() };
         jump(&sock, &file, 10, None, Some(&other)).unwrap();
-        let v = eval(state);
-        assert_eq!(v["n"], 2, "{v}");
-        assert_eq!(v["base"]["name"], "tether://v1/a.txt", "{v}");
-        // a plain jump afterwards: the diff is gone and diff mode is off (back to the default)
+        assert_eq!(eval(state)["base"]["sha"], other.sha);
+        // a plain jump afterwards: back to the default
         assert_eq!(jump(&sock, &file, 5, None, None).unwrap(), format!("{}:5", file.display()));
         let v = eval(state);
-        assert_eq!(v["n"], 1, "{v}");
-        assert_eq!(v["cur_diff"], false, "{v}");
         assert!(v["base"].is_null(), "{v}");
+        assert_eq!(v["n"], 1, "{v}");
         let _ = child.kill();
         let _ = child.wait();
     }

@@ -24,7 +24,7 @@ All of them work inside a Herdr pane (they read `HERDR_WORKSPACE_ID`) and add `-
 | `tether layout` | Tabs, panes, commands, agent states and Neovims of this workspace. Run it before changing anything. |
 | `tether tab open <name> [-- cmd]` / `rename` / `focus` / `close` | Manage tabs. Rename and close only touch tabs tether made. |
 | `tether split right\|down [--ratio r] [--pane id] [-- cmd]` | Split a pane and run a command in it. |
-| `tether code open path:line[-end] [--in tab] [--from pane] [--diff rev]` | Open or reuse Neovim at a line (never a second Neovim in a tab). `--diff` also shows a side-by-side diff against a git revision, for that open only. |
+| `tether code open path:line[-end] [--in tab] [--from pane] [--diff rev]` | Open or reuse Neovim at a line (never a second Neovim in a tab). `--diff` makes that Neovim's gitsigns and neo-tree compare against a git revision, until the next open without it. |
 | `tether send [--to primary\|pane\|agent] --ref path:line --text ...` | Send a comment with the line's code to an agent. `--diagram <id> --node <id>` comments on a diagram element. |
 | `tether agents` | Agents in this workspace with their states. |
 | `tether diagram create spec.json \| - [--star]` | Validate and save a diagram, open it in a new tab. Also `show`, `update`, `export --mermaid`, `render`. |

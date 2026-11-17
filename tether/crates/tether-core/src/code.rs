@@ -137,9 +137,8 @@ fn git(dir: &Path, args: &[&str]) -> Option<Vec<u8>> {
     out.status.success().then_some(out.stdout)
 }
 
-/// Resolve `rev` (a branch, tag, commit, `HEAD~3`, ...) in the repo of `file` and read the file as
-/// it is in that commit. Fails when `file` is not in a git repo or `rev` is not a commit; a file
-/// that does not exist in that commit gives `text: None` (the diff then shows it as all new).
+/// Resolve `rev` (a branch, tag, commit, `HEAD~3`, ...) in the repo of `file`. Fails when `file`
+/// is not in a git repo or `rev` is not a commit.
 pub fn diff_base(file: &Path, rev: &str) -> Result<nvim::DiffBase> {
     let rev = rev.trim();
     if rev.is_empty() || rev.starts_with('-') || rev.chars().any(|c| c.is_whitespace() || c.is_control()) {
@@ -147,14 +146,9 @@ pub fn diff_base(file: &Path, rev: &str) -> Result<nvim::DiffBase> {
             "--diff \"{rev}\" is not a git revision (give a branch, tag or commit, e.g. main or HEAD~1)"
         )));
     }
+    // the root exactly as git prints it: neo-tree keys its per-worktree base by that string
     let top = send::git_toplevel(file)
         .ok_or_else(|| TetherError::Input(format!("--diff needs a git repo, and {} is not in one", file.display())))?;
-    let top = top.canonicalize().unwrap_or(top);
-    let rel = file
-        .strip_prefix(&top)
-        .map_err(|_| TetherError::Input(format!("{} is outside its git worktree {}", file.display(), top.display())))?
-        .to_string_lossy()
-        .into_owned();
     let sha = git(&top, &["rev-parse", "--verify", "--quiet", "--end-of-options", &format!("{rev}^{{commit}}")])
         .map(|o| String::from_utf8_lossy(&o).trim().to_string())
         .filter(|s| !s.is_empty())
@@ -164,8 +158,7 @@ pub fn diff_base(file: &Path, rev: &str) -> Result<nvim::DiffBase> {
     let short = git(&top, &["rev-parse", "--short", &sha])
         .map(|o| String::from_utf8_lossy(&o).trim().to_string())
         .unwrap_or_else(|| sha.chars().take(7).collect());
-    let text = git(&top, &["show", &format!("{sha}:{rel}")]).map(|o| String::from_utf8_lossy(&o).into_owned());
-    Ok(nvim::DiffBase { rev: rev.to_string(), sha, short, rel, text })
+    Ok(nvim::DiffBase { rev: rev.to_string(), sha, short, root: top.to_string_lossy().into_owned() })
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -185,7 +178,7 @@ pub struct CodeOpened {
     pub tab_created: bool,
     /// Label of that new tab.
     pub tab_label: Option<String>,
-    /// `--diff`: the revision the file is shown against, as `<rev> (<short sha>)`.
+    /// `--diff`: the git base this Neovim now compares against, as `<rev> (<short sha>)`.
     pub diff: Option<String>,
     /// What was done and why, in one line (printed by the CLI).
     pub summary: String,
@@ -203,7 +196,8 @@ pub struct CodeOpen<'a> {
     pub ready_timeout: Duration,
     pub wrapper: String,
     pub placement: &'a Placement,
-    /// `--diff`: show the file side by side against this git revision, for this open only.
+    /// `--diff`: make this Neovim's gitsigns and neo-tree compare against this revision (until an
+    /// open without it).
     pub diff: Option<&'a str>,
 }
 
@@ -370,10 +364,7 @@ pub fn open(client: &Client, store: &StateStore, scope: &Scope, editor: &dyn Edi
     }
     let diff_label = diff.as_ref().map(|d| format!("{} ({})", d.rev, d.short));
     if let Some(d) = &diff {
-        summary.push_str(&format!("; diffing against {} ({})", d.rev, d.short));
-        if d.text.is_none() {
-            warnings.push(format!("{} does not exist in {}; the diff shows the whole file as new", d.rel, d.rev));
-        }
+        summary.push_str(&format!("; git base {} ({}) for this Neovim", d.rev, d.short));
     }
     Ok(CodeOpened {
         pane_id,
@@ -431,16 +422,17 @@ mod tests {
     }
 
     #[test]
-    fn diff_base_reads_the_file_at_a_revision() {
+    fn diff_base_resolves_the_revision() {
         let (_d, root) = diff_repo();
         let b = diff_base(&root.join("a.txt"), "v1").unwrap();
-        assert_eq!((b.rev.as_str(), b.rel.as_str(), b.text.as_deref()), ("v1", "a.txt", Some("one\n")));
+        assert_eq!(b.rev, "v1");
         assert_eq!(b.sha.len(), 40);
         assert!(b.sha.starts_with(&b.short));
-        assert_eq!(diff_base(&root.join("a.txt"), "HEAD").unwrap().text.as_deref(), Some("two\n"));
+        assert_eq!(Path::new(&b.root).canonicalize().unwrap(), root);
         assert_eq!(diff_base(&root.join("a.txt"), "main~1").unwrap().sha, b.sha);
-        // a file the revision does not have: diffed against nothing
-        assert_eq!(diff_base(&root.join("new.txt"), "main").unwrap().text, None);
+        assert_ne!(diff_base(&root.join("a.txt"), "HEAD").unwrap().sha, b.sha);
+        // a file the revision does not have is fine (it just shows as all new)
+        assert!(diff_base(&root.join("new.txt"), "main").is_ok());
     }
 
     #[test]
