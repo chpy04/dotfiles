@@ -733,10 +733,8 @@ fn draw_header(app: &App, buf: &mut Buffer, area: RRect) {
 fn hint_segments(app: &App) -> Vec<(String, &'static str)> {
     let km = &app.keymap;
     let mut v: Vec<(String, &'static str)> = if app.is_flowchart() {
-        vec![
-            (format!("{}/{}", km.hint(Action::StepBack), km.hint(Action::StepForward)), "step"),
-            (format!("{}/{}", km.hint(Action::BranchNext), km.hint(Action::BranchPrev)), "branch"),
-        ]
+        let (step, branch) = app.flow_pair_hints();
+        vec![(step, "step"), (branch, "branch")]
     } else {
         vec![("j/k".into(), "message"), ("h/l".into(), "participant")]
     };
@@ -1027,14 +1025,11 @@ fn draw_help(app: &App, buf: &mut Buffer, body: RRect) {
     let flow = app.is_flowchart();
     let mut rows: Vec<(String, String)> = Vec::new();
     if flow {
-        rows.push((
-            format!("{} / {}", km.hint(Action::StepBack), km.hint(Action::StepForward)),
-            "step back / forward along the arrows".into(),
-        ));
-        rows.push((
-            format!("{} / {}", km.hint(Action::BranchNext), km.hint(Action::BranchPrev)),
-            "switch branch (the parent's other children)".into(),
-        ));
+        let (step, branch) = app.flow_pair_hints();
+        let tb = matches!(&app.diagram, tether_core::diagram::Diagram::Flowchart(f) if f.direction() == tether_core::diagram::Direction::TB);
+        let along = if tb { "step forward / back along the arrows" } else { "step back / forward along the arrows" };
+        rows.push((step.replace('/', " / "), along.into()));
+        rows.push((branch.replace('/', " / "), "switch branch (the parent's other children)".into()));
         rows.push((
             format!(
                 "{} {} {} {}",

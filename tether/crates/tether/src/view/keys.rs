@@ -2,6 +2,7 @@
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use tether_core::config::Keys;
+use tether_core::diagram::Direction;
 
 /// One key press, normalized: shift is folded into the character, alt is ignored.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -160,20 +161,34 @@ pub struct Keymap {
 }
 
 impl Keymap {
-    /// The keymap of a flowchart (`flow`) or of a sequence diagram. They share everything but the
-    /// movement keys: a flowchart steps along arrows (`view_flow_*`), a sequence diagram moves
-    /// between messages and participants (`view_down` & co). All keys are validated either way.
-    pub fn from_keys(k: &Keys, flow: bool) -> Result<Keymap, String> {
+    /// The keymap of a flowchart (`flow` is its direction) or of a sequence diagram (`None`).
+    /// They share everything but the movement keys: a flowchart steps along arrows
+    /// (`view_flow_*`), a sequence diagram moves between messages and participants (`view_down`
+    /// & co). All keys are validated either way.
+    ///
+    /// The `view_flow_*` step/branch keys are named for a left-to-right (`LR`) chart, where the
+    /// arrows run along `h`/`l` and sibling branches stack along `j`/`k`. A top-to-bottom (`TB`)
+    /// chart transposes them: the `view_flow_branch_next`/`_prev` keys (`j`/`k`) step forward /
+    /// back along the arrows and the `view_flow_forward`/`_back` keys (`l`/`h`) switch to the
+    /// next / previous branch. So the keys always follow the screen: along the flow steps, across
+    /// it switches branch.
+    pub fn from_keys(k: &Keys, flow: Option<Direction>) -> Result<Keymap, String> {
         let mut binds: Vec<(Vec<Chord>, Action)> = Vec::new();
+        let tb = flow == Some(Direction::TB);
+        let (fwd, back, next, prev) = if tb {
+            (Action::BranchNext, Action::BranchPrev, Action::StepForward, Action::StepBack)
+        } else {
+            (Action::StepForward, Action::StepBack, Action::BranchNext, Action::BranchPrev)
+        };
         let movement = [
             (&k.view_down, Action::Down, "view_down", false),
             (&k.view_up, Action::Up, "view_up", false),
             (&k.view_left, Action::Left, "view_left", false),
             (&k.view_right, Action::Right, "view_right", false),
-            (&k.view_flow_forward, Action::StepForward, "view_flow_forward", true),
-            (&k.view_flow_back, Action::StepBack, "view_flow_back", true),
-            (&k.view_flow_branch_next, Action::BranchNext, "view_flow_branch_next", true),
-            (&k.view_flow_branch_prev, Action::BranchPrev, "view_flow_branch_prev", true),
+            (&k.view_flow_forward, fwd, "view_flow_forward", true),
+            (&k.view_flow_back, back, "view_flow_back", true),
+            (&k.view_flow_branch_next, next, "view_flow_branch_next", true),
+            (&k.view_flow_branch_prev, prev, "view_flow_branch_prev", true),
             (&k.view_flow_left, Action::Left, "view_flow_left", true),
             (&k.view_flow_down, Action::Down, "view_flow_down", true),
             (&k.view_flow_up, Action::Up, "view_flow_up", true),
@@ -181,7 +196,7 @@ impl Keymap {
         ];
         for (s, a, name, is_flow) in movement {
             let seq = parse_keyseq(s, &k.leader).map_err(|e| format!("keys.{name}: {e}"))?;
-            if is_flow == flow {
+            if is_flow == flow.is_some() {
                 binds.push((seq, a));
             }
         }
@@ -271,8 +286,8 @@ mod tests {
 
     #[test]
     fn default_keymap_matches_and_prefixes() {
-        let km = Keymap::from_keys(&Keys::default(), true).unwrap();
-        let seq = Keymap::from_keys(&Keys::default(), false).unwrap();
+        let km = Keymap::from_keys(&Keys::default(), Some(Direction::LR)).unwrap();
+        let seq = Keymap::from_keys(&Keys::default(), None).unwrap();
         assert_eq!(seq.lookup(&[Chord::ch('j')]), Match::Action(Action::Down));
         assert_eq!(seq.lookup(&[Chord::ch('l')]), Match::Action(Action::Right));
         assert_eq!(seq.lookup(&[Chord::ch('J')]), Match::None, "flowchart keys are not bound in sequence diagrams");
@@ -299,11 +314,25 @@ mod tests {
     }
 
     #[test]
+    fn top_to_bottom_flowcharts_transpose_step_and_branch_keys() {
+        let tb = Keymap::from_keys(&Keys::default(), Some(Direction::TB)).unwrap();
+        assert_eq!(tb.lookup(&[Chord::ch('j')]), Match::Action(Action::StepForward));
+        assert_eq!(tb.lookup(&[Chord::ch('k')]), Match::Action(Action::StepBack));
+        assert_eq!(tb.lookup(&[Chord::ch('l')]), Match::Action(Action::BranchNext));
+        assert_eq!(tb.lookup(&[Chord::ch('h')]), Match::Action(Action::BranchPrev));
+        // on-screen moves do not depend on the direction
+        assert_eq!(tb.lookup(&[Chord::ch('J')]), Match::Action(Action::Down));
+        assert_eq!(tb.lookup(&[Chord::ch('L')]), Match::Action(Action::Right));
+        assert_eq!(tb.hint(Action::StepForward), "j");
+        assert_eq!(tb.hint(Action::BranchPrev), "h");
+    }
+
+    #[test]
     fn custom_leader_and_bad_config() {
         let k = Keys { leader: ",".into(), ..Keys::default() };
-        let km = Keymap::from_keys(&k, true).unwrap();
+        let km = Keymap::from_keys(&k, Some(Direction::TB)).unwrap();
         assert_eq!(km.lookup(&[Chord::ch(','), Chord::ch('a'), Chord::ch('c')]), Match::Action(Action::Comment));
         let k = Keys { view_down: "<nope>".into(), ..Keys::default() };
-        assert!(Keymap::from_keys(&k, true).unwrap_err().contains("keys.view_down"));
+        assert!(Keymap::from_keys(&k, Some(Direction::TB)).unwrap_err().contains("keys.view_down"));
     }
 }

@@ -126,7 +126,7 @@ JSON Schemas are published in the repo: `schema/flowchart.schema.json` and `sche
 }
 ```
 
-`shape`: `process` (default), `decision`, `terminal` (start/end), `io`, `subroutine`, `database`. `direction`: `TB` (default) or `LR`. `style`: `solid` (default) or `dashed` (use for async, optional or fallback paths). Edge `label` is optional but use it on every branch out of a decision. Node `id`s are yours: short, stable, unique, and only letters, digits, `_`, `.` and `-` (sequence participant, message and note ids share one namespace).
+`shape`: `process` (default), `decision`, `terminal` (start/end), `io`, `subroutine`, `database`. `direction`: `TB` (top to bottom) or `LR` (left to right). **Always set it explicitly** and pick it on purpose, because the viewer's keys follow it (see below). Use `TB` for most flows, and for anything with several decisions or long chains (branches spread across the wide terminal, steps go down). Use `LR` for a short, mostly linear pipeline of stages (about 6 or fewer steps deep) with few branches, read left to right. When unsure, use `TB`. `style`: `solid` (default) or `dashed` (use for async, optional or fallback paths). Edge `label` is optional but use it on every branch out of a decision. Node `id`s are yours: short, stable, unique, and only letters, digits, `_`, `.` and `-` (sequence participant, message and note ids share one namespace).
 
 ### Sequence example
 
@@ -192,7 +192,7 @@ tether view <id> [--placement tab|split|here]  # (re)open the viewer
 
 ### What the user does in the viewer (so you can answer their comments)
 
-In a flowchart `h`/`l` step back/forward along the arrows, `j`/`k` switch branch and `HJKL` move on screen; in a sequence diagram `j`/`k` move between messages and `h`/`l` between participants. Enter opens the linked code in the Neovim split to the right of the viewer (the same Neovim every time) and focuses it, Tab expands `details`, `/` searches, Space-a-c comments on the focused node to you. A comment from a node arrives as:
+In a flowchart the keys follow its `direction`: in `TB` `j`/`k` step forward/back along the arrows and `h`/`l` switch branch; in `LR` `l`/`h` step forward/back and `j`/`k` switch branch. `HJKL` move on screen either way. When you show a flowchart, tell the user its direction in one short line (e.g. "top-to-bottom: j/k follow the flow, h/l switch branch"); in a sequence diagram `j`/`k` move between messages and `h`/`l` between participants. Enter opens the linked code in the Neovim split to the right of the viewer (the same Neovim every time) and focuses it, Tab expands `details`, `/` searches, Space-a-c comments on the focused node to you. A comment from a node arrives as:
 
 ```
 [comment] diagram "Session refresh" › node "Token expired?"  src/auth/session.ts:142  (worktree: feat-login)

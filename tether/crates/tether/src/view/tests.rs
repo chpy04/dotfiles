@@ -190,7 +190,7 @@ fn render_through_a_real_test_backend_terminal() {
         .unwrap();
     let text = buffer_to_text(terminal.backend().buffer());
     assert!(text.contains("Session refresh") && text.contains("Token expired?") && text.contains("Call /token/refresh"));
-    assert!(text.contains("h/l step") && text.contains("␣ac ask"), "{text}");
+    assert!(text.contains("j/k step") && text.contains("␣ac ask"), "{text}");
 }
 
 // ------------------------------------------------------------------------------------ render: style
@@ -280,7 +280,7 @@ fn incident_edges_are_accent_and_the_highlighted_branch_is_bold() {
     assert_eq!(rgb(c1.fg), r3(theme.accent.mix(theme.edge, 0.45)), "other edge of the focus: softer accent");
     assert!(!c1.modifier.contains(Modifier::BOLD));
     // switching branch moves the accent
-    keys(&mut app, "ljh"); // into the first branch, across to the second, back: check highlights its second edge
+    keys(&mut app, "jlk"); // into the first branch, across to the second, back: check highlights its second edge
     let c1 = sample(&mut app, &e1, &e1.points[e1.points.len() / 2]);
     assert_eq!(rgb(c1.fg), r3(theme.accent));
     assert!(c1.modifier.contains(Modifier::BOLD));
@@ -590,8 +590,14 @@ fn spatial_reaches_every_node_with_details_expanded() {
 
 fn lr_variant(name: &str) -> Diagram {
     let src = std::fs::read_to_string(fixtures().join(format!("{name}.json"))).unwrap();
-    assert!(src.contains("\"direction\": \"TB\""));
-    validate(&src.replace("\"direction\": \"TB\"", "\"direction\": \"LR\"")).unwrap()
+    let src = if src.contains("\"direction\": \"TB\"") {
+        src.replace("\"direction\": \"TB\"", "\"direction\": \"LR\"")
+    } else {
+        // no direction given (TB by default): add one
+        let i = src.find('{').expect("a JSON object") + 1;
+        format!("{{\"direction\": \"LR\",{}", &src[i..])
+    };
+    validate(&src).unwrap()
 }
 
 #[test]
@@ -624,12 +630,12 @@ fn spatial_reaches_every_node_in_left_to_right_diagrams() {
 }
 
 #[test]
-fn l_steps_forward_along_a_chain_and_h_steps_back() {
+fn tb_j_steps_forward_along_a_chain_and_k_steps_back() {
     let wt = worktree();
     let mut app = app_for(fixture("session_refresh_30"), wt.path(), false, (100, 30));
     let mut path = vec![focus(&app).to_string()];
     for _ in 0..8 {
-        keys(&mut app, "l");
+        keys(&mut app, "j");
         if path.last().map(String::as_str) != Some(focus(&app)) {
             path.push(focus(&app).to_string());
         }
@@ -641,69 +647,84 @@ fn l_steps_forward_along_a_chain_and_h_steps_back() {
         assert!(nav.children[&id(&w[0])].contains(&id(&w[1])), "{} -> {}", w[0], w[1]);
     }
     for expect in path.iter().rev().skip(1) {
-        keys(&mut app, "h");
+        keys(&mut app, "k");
         assert_eq!(focus(&app), expect);
     }
-    keys(&mut app, "h");
-    assert_eq!(focus(&app), path[0], "h at the start stays");
+    keys(&mut app, "k");
+    assert_eq!(focus(&app), path[0], "k at the start stays");
     assert!(app.status.as_ref().unwrap().text.contains("start of the flow"));
 }
 
 #[test]
-fn prd_example_l_j_k_h_switch_branches_and_h_l_returns_to_the_last_one() {
+fn prd_example_tb_j_l_h_k_switch_branches_and_k_j_returns_to_the_last_one() {
     let wt = worktree();
     let mut app = app_for(fixture("prd_flowchart"), wt.path(), false, (100, 30));
     assert_eq!(focus(&app), "check");
     assert_eq!(app.highlighted_branch(&id("check")), Some(id("refresh")), "default: the first child by position");
-    keys(&mut app, "l");
-    assert_eq!(focus(&app), "refresh", "l enters the first branch");
     keys(&mut app, "j");
-    assert_eq!(focus(&app), "ok", "j switches to the other branch");
+    assert_eq!(focus(&app), "refresh", "j enters the first branch");
+    keys(&mut app, "l");
+    assert_eq!(focus(&app), "ok", "l switches to the other branch");
     assert!(app.status.as_ref().unwrap().text.contains("no → Continue request"), "{:?}", app.status);
-    keys(&mut app, "k");
-    assert_eq!(focus(&app), "refresh", "k comes back");
-    keys(&mut app, "j");
-    assert_eq!(focus(&app), "ok");
     keys(&mut app, "h");
-    assert_eq!(focus(&app), "check", "h returns to the parent");
+    assert_eq!(focus(&app), "refresh", "h comes back");
+    keys(&mut app, "l");
+    assert_eq!(focus(&app), "ok");
+    keys(&mut app, "k");
+    assert_eq!(focus(&app), "check", "k returns to the parent");
     assert_eq!(app.highlighted_branch(&id("check")), Some(id("ok")), "the parent remembers the last branch");
-    keys(&mut app, "l");
-    assert_eq!(focus(&app), "ok", "a later l returns to the last-chosen branch");
+    keys(&mut app, "j");
+    assert_eq!(focus(&app), "ok", "a later j returns to the last-chosen branch");
     // a leaf has nothing to step to
-    keys(&mut app, "l");
+    keys(&mut app, "j");
     assert_eq!(focus(&app), "ok");
     assert!(app.status.as_ref().unwrap().text.contains("end of the flow"));
+}
+
+#[test]
+fn lr_flowcharts_step_with_h_l_and_switch_branch_with_j_k() {
+    let wt = worktree();
+    let mut app = app_for(lr_variant("prd_flowchart"), wt.path(), false, (100, 30));
+    assert_eq!(focus(&app), "check");
+    keys(&mut app, "l");
+    assert_eq!(focus(&app), "refresh", "l steps forward (rightwards) into the first branch");
+    keys(&mut app, "j");
+    assert_eq!(focus(&app), "ok", "j switches to the branch below");
+    keys(&mut app, "k");
+    assert_eq!(focus(&app), "refresh", "k switches back");
+    keys(&mut app, "h");
+    assert_eq!(focus(&app), "check", "h steps back");
 }
 
 #[test]
 fn branch_switching_wraps_around_in_both_directions() {
     let wt = worktree();
     let mut app = app_for(fixture("prd_flowchart"), wt.path(), false, (100, 30));
-    keys(&mut app, "l");
-    assert_eq!(focus(&app), "refresh");
-    keys(&mut app, "k");
-    assert_eq!(focus(&app), "ok", "k from the first branch wraps to the last");
     keys(&mut app, "j");
-    assert_eq!(focus(&app), "refresh", "j from the last branch wraps to the first");
+    assert_eq!(focus(&app), "refresh");
+    keys(&mut app, "h");
+    assert_eq!(focus(&app), "ok", "h from the first branch wraps to the last");
+    keys(&mut app, "l");
+    assert_eq!(focus(&app), "refresh", "l from the last branch wraps to the first");
     // three branches: a -> x, y, z
     let src = r#"{"type":"flowchart","title":"three","nodes":[
         {"id":"a","label":"a"},{"id":"x","label":"x"},{"id":"y","label":"y"},{"id":"z","label":"z"}],
         "edges":[{"from":"a","to":"x"},{"from":"a","to":"y"},{"from":"a","to":"z"}]}"#;
     let mut app = app_for(validate(src).unwrap(), wt.path(), false, (100, 30));
-    keys(&mut app, "l");
+    keys(&mut app, "j");
     let first = focus(&app).to_string();
     let order = app.branch_order(&id("a"));
     assert_eq!(order.len(), 3);
     assert_eq!(first, order[0].as_str());
     let mut seen = vec![first];
     for _ in 0..3 {
-        keys(&mut app, "j");
+        keys(&mut app, "l");
         seen.push(focus(&app).to_string());
     }
     let want: Vec<String> = [0, 1, 2, 0].iter().map(|&i| order[i].to_string()).collect();
-    assert_eq!(seen, want, "j walks the branches by position and wraps");
-    keys(&mut app, "k");
-    assert_eq!(focus(&app), order[2].as_str(), "k wraps back");
+    assert_eq!(seen, want, "l walks the branches by position and wraps");
+    keys(&mut app, "h");
+    assert_eq!(focus(&app), order[2].as_str(), "h wraps back");
     assert!(app.status.as_ref().unwrap().text.contains("branch 3/3"), "{:?}", app.status);
 }
 
@@ -734,17 +755,17 @@ fn no_sibling_branch_says_so_and_roots_switch_between_roots() {
     let src = r#"{"type":"flowchart","title":"chain","nodes":[{"id":"a","label":"a"},{"id":"b","label":"b"}],
         "edges":[{"from":"a","to":"b"}]}"#;
     let mut app = app_for(validate(src).unwrap(), wt.path(), false, (100, 30));
-    keys(&mut app, "l");
-    assert_eq!(focus(&app), "b");
     keys(&mut app, "j");
     assert_eq!(focus(&app), "b");
+    keys(&mut app, "l");
+    assert_eq!(focus(&app), "b");
     assert!(app.status.as_ref().unwrap().text.contains("no other branch here"), "{:?}", app.status);
-    keys(&mut app, "kh");
+    keys(&mut app, "hk");
     assert_eq!(focus(&app), "a");
-    keys(&mut app, "k");
+    keys(&mut app, "h");
     assert_eq!(focus(&app), "a", "a lone root has no other root either");
     assert!(app.status.as_ref().unwrap().text.contains("no other branch here"));
-    // two roots: j / k switch between them
+    // two roots: h / l switch between them
     let src = r#"{"type":"flowchart","title":"roots","nodes":[
         {"id":"r1","label":"r1"},{"id":"r2","label":"r2"},{"id":"c","label":"c"}],
         "edges":[{"from":"r1","to":"c"}]}"#;
@@ -752,16 +773,16 @@ fn no_sibling_branch_says_so_and_roots_switch_between_roots() {
     let roots = app.layout.flow_nav().unwrap().roots.clone();
     assert_eq!(roots.len(), 2);
     assert_eq!(app.focus, roots[0]);
-    keys(&mut app, "j");
+    keys(&mut app, "l");
     assert_eq!(app.focus, roots[1]);
-    keys(&mut app, "j");
+    keys(&mut app, "l");
     assert_eq!(app.focus, roots[0], "wraps");
-    keys(&mut app, "k");
+    keys(&mut app, "h");
     assert_eq!(app.focus, roots[1]);
 }
 
 #[test]
-fn h_prefers_the_edge_we_arrived_by_else_the_first_parent() {
+fn step_back_prefers_the_edge_we_arrived_by_else_the_first_parent() {
     let wt = worktree();
     let mut app = app_for(fixture("session_refresh_30"), wt.path(), false, (100, 30));
     let nav = app.layout.flow_nav().unwrap().clone();
@@ -770,21 +791,21 @@ fn h_prefers_the_edge_we_arrived_by_else_the_first_parent() {
     // arrive from the second parent
     app.set_focus(second.clone());
     app.branch.insert(second.clone(), x.clone());
-    keys(&mut app, "l");
+    keys(&mut app, "j");
     assert_eq!(app.focus, x);
-    keys(&mut app, "h");
+    keys(&mut app, "k");
     assert_eq!(app.focus, second, "back along the arrival edge");
     // arrive some other way (spatially): the first parent by position
     app.came_from.clear();
     app.set_focus(x.clone());
-    keys(&mut app, "h");
+    keys(&mut app, "k");
     assert_eq!(app.focus, first, "no arrival memory: the first parent");
     // switching branch counts as arriving from that parent
     app.set_focus(second.clone());
     app.branch.insert(second.clone(), x.clone());
-    keys(&mut app, "l");
     keys(&mut app, "j");
-    keys(&mut app, "h");
+    keys(&mut app, "l");
+    keys(&mut app, "k");
     assert_eq!(app.focus, second, "the sibling we switched to hangs off the same parent");
 }
 
@@ -813,7 +834,7 @@ fn hjkl_alone_reach_every_node_of_the_30_node_flowchart() {
 fn jump_list_goes_back_and_forward_over_focus_history() {
     let wt = worktree();
     let mut app = app_for(fixture("prd_flowchart"), wt.path(), false, (100, 30));
-    keys(&mut app, "lj"); // check -> refresh -> ok
+    keys(&mut app, "jl"); // check -> refresh -> ok
     assert_eq!(focus(&app), "ok");
     keys(&mut app, "<c-o>");
     assert_eq!(focus(&app), "refresh");
@@ -832,7 +853,7 @@ fn jump_list_goes_back_and_forward_over_focus_history() {
     // a new move after going back drops the forward entries
     keys(&mut app, "<c-o><c-o>");
     assert_eq!(focus(&app), "check");
-    keys(&mut app, "lj"); // check remembers `ok`, so l enters ok and j switches to refresh
+    keys(&mut app, "jl"); // check remembers `ok`, so j enters ok and l switches to refresh
     assert_eq!(focus(&app), "refresh");
     keys(&mut app, "<c-i>");
     assert_eq!(focus(&app), "refresh", "nothing forward after a fresh move");
@@ -850,7 +871,7 @@ fn jump_list_is_capped() {
     let wt = worktree();
     let mut app = app_for(fixture("prd_flowchart"), wt.path(), false, (100, 30));
     for _ in 0..150 {
-        keys(&mut app, "lh");
+        keys(&mut app, "jk");
     }
     assert!(app.history.len() <= super::app::JUMP_LIMIT, "{}", app.history.len());
     assert_eq!(app.history.len(), super::app::JUMP_LIMIT);
@@ -1017,7 +1038,7 @@ fn enter_on_a_link_with_diff_passes_it_to_code_open() {
     assert_eq!(argv[i + 1], "main");
     assert!(app.status.as_ref().unwrap().text.contains("(diff vs main)"));
     // the next node has no diff: its open carries none
-    keys(&mut app, "l");
+    keys(&mut app, "j");
     let fx = keys(&mut app, "<cr>");
     if let Some(e) = fx.first() {
         assert!(!e.argv().unwrap().contains(&"--diff".to_string()), "{e:?}");
@@ -1082,7 +1103,7 @@ fn enter_opens_exact_and_moved_links_and_refuses_stale_ones() {
     assert!(app.status.as_ref().unwrap().text.contains("cannot read src/auth/session.ts"));
 
     // no code link on the node
-    keys(&mut app, "lj");
+    keys(&mut app, "jl");
     assert_eq!(focus(&app), "ok");
     assert!(keys(&mut app, "<cr>").is_empty());
     assert!(app.status.as_ref().unwrap().text.contains("no code link"));
@@ -1126,7 +1147,7 @@ fn agent(pane: &str, tab: u32, kind: &str, state: &str, primary: bool) -> AgentR
 fn comment_flow_produces_the_send_effect() {
     let wt = worktree();
     let mut app = app_for(fixture("prd_flowchart"), wt.path(), false, (100, 30));
-    keys(&mut app, "l"); // refresh
+    keys(&mut app, "j"); // refresh
     assert!(keys(&mut app, "<space>ac").is_empty());
     let Mode::Comment(c) = &app.mode else { panic!("comment float should be open") };
     assert_eq!((c.to.as_str(), c.node.as_str()), ("primary", "refresh"));
@@ -1339,7 +1360,7 @@ fn quit_help_and_clear() {
     let text = buffer_to_text(&render(&app));
     assert!(
         text.contains("Keys")
-            && text.contains("step back / forward along the arrows")
+            && text.contains("step forward / back along the arrows")
             && text.contains("switch branch")
             && text.contains("move on screen")
             && text.contains("comment to the primary agent"),
@@ -1356,7 +1377,7 @@ fn custom_keys_and_leader_from_config() {
     let mut cfg = Config::default();
     cfg.keys.leader = ",".into();
     cfg.keys.view_flow_forward = "x".into();
-    let mut app = build_app(fixture("prd_flowchart"), "dg-1", wt.path().to_path_buf(), &cfg, Some(false), (100, 30)).unwrap();
+    let mut app = build_app(lr_variant("prd_flowchart"), "dg-1", wt.path().to_path_buf(), &cfg, Some(false), (100, 30)).unwrap();
     keys(&mut app, "x");
     assert_eq!(focus(&app), "refresh");
     keys(&mut app, ",ac");
@@ -1372,7 +1393,10 @@ fn footer_hints_follow_the_diagram_type() {
     let seq = app_for(fixture("login_sequence"), wt.path(), false, (110, 30));
     let ft = buffer_to_text(&render(&flow));
     let st = buffer_to_text(&render(&seq));
-    assert!(ft.contains("h/l step · j/k branch · ⏎ code · tab details · ␣ac ask"), "{ft}");
+    assert!(ft.contains("j/k step · h/l branch · ⏎ code · tab details · ␣ac ask"), "TB: {ft}");
+    let lr = app_for(lr_variant("prd_flowchart"), wt.path(), false, (100, 30));
+    let lt = buffer_to_text(&render(&lr));
+    assert!(lt.contains("h/l step · j/k branch · ⏎ code · tab details · ␣ac ask"), "LR: {lt}");
     assert!(st.contains("j/k message · h/l participant · ⏎ code · tab details · ␣ac ask"), "{st}");
 }
 

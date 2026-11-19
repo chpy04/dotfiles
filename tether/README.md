@@ -56,8 +56,8 @@ Diagram viewer (`tether view`):
 
 | Key | Flowchart | Sequence diagram |
 | --- | --- | --- |
-| `l` / `h` | step forward along the highlighted outgoing edge (the first branch by position, or the last one you chose at that node) / step back along the edge you arrived by (else the first parent) | `j`/`k` next / previous message, `h`/`l` previous / next participant |
-| `j` / `k` | switch to the next / previous sibling branch (the other children of the node `h` returns to, by position, wrapping; roots switch between roots). The parent remembers the choice, so `h` then `l` comes back to it | see the `l` / `h` row |
+| along the flow: `j` / `k` (`TB`), `l` / `h` (`LR`) | step forward along the highlighted outgoing edge (the first branch by position, or the last one you chose at that node) / step back along the edge you arrived by (else the first parent) | `j`/`k` next / previous message, `h`/`l` previous / next participant |
+| across the flow: `l` / `h` (`TB`), `j` / `k` (`LR`) | switch to the next / previous sibling branch (the other children of the node a step back returns to, by position, wrapping; roots switch between roots). The parent remembers the choice, so stepping back then forward comes back to it | see the row above |
 | `H` `J` `K` `L` (and the arrow keys) | move on screen to the nearest node left / down / up / right (`J`/`K` keep their column), so every node is reachable by position | arrow keys, as `h` `j` `k` `l` above |
 | `Ctrl-o` / `Ctrl-i` | jump list: back / forward over where the focus has been (up to 100 positions; `Ctrl-i` needs a terminal with the kitty keyboard protocol, others send it as `Tab`) | same |
 | `Enter` | open the linked code in Neovim (reuses the same one; stale links refuse to jump) and focus that pane (`[view] focus_code = false` keeps focus on the viewer) | same |
@@ -67,9 +67,9 @@ Diagram viewer (`tether view`):
 | `g` / `gg` / `G`, `Ctrl-d` / `Ctrl-u`, `?`, `q` | first / last, half page, help, quit | same |
 | `s` | star / unstar this diagram (shown as ★ in the header; `view_star` remaps it) | same |
 
-In a flowchart `h`/`l` walk the arrows and `j`/`k` switch branch; the highlighted outgoing edge of the focused node (where `l` goes) is drawn bold in the accent color. Moving the focus never retargets Neovim; only `Enter` does.
+Flowchart keys follow the chart's `direction`: the key pair along the flow steps through it and the pair across it switches branch. A top-to-bottom (`TB`, the default) chart steps with `j`/`k` and switches branch with `h`/`l`; a left-to-right (`LR`) chart is the other way round. The footer shows the current pair. The highlighted outgoing edge of the focused node (where a forward step goes) is drawn bold in the accent color. Moving the focus never retargets Neovim; only `Enter` does.
 The viewer keys are remappable under `[keys]`: `view_down`/`view_up`/`view_left`/`view_right` (sequence diagrams),
-`view_flow_back`/`view_flow_forward`/`view_flow_branch_next`/`view_flow_branch_prev` and `view_flow_left`/`view_flow_down`/`view_flow_up`/`view_flow_right` (flowcharts), `view_jump_back`, `view_jump_forward`.
+`view_flow_back`/`view_flow_forward`/`view_flow_branch_next`/`view_flow_branch_prev` (named for `LR` charts; a `TB` chart swaps the two pairs) and `view_flow_left`/`view_flow_down`/`view_flow_up`/`view_flow_right` (flowcharts), `view_jump_back`, `view_jump_forward`.
 
 Diagram browser (`tether diagrams`):
 

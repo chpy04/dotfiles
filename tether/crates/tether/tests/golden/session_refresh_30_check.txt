@@ -117,4 +117,4 @@
              ╰──────────────────────╯
 
 
- h/l step · j/k branch · ⏎ code · tab details · ␣ac ask · / search · ? help · q quit
+ j/k step · h/l branch · ⏎ code · tab details · ␣ac ask · / search · ? help · q quit

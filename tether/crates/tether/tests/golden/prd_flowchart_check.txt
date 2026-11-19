@@ -11,4 +11,4 @@
   ╰─────────────────────────╯      ╰────────────────────╯
 
 
- h/l step · j/k branch · ⏎ code · tab details · ␣ac ask
+ j/k step · h/l branch · ⏎ code · tab details · ␣ac ask

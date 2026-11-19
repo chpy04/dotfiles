@@ -61,6 +61,8 @@ pub struct Keys {
     pub view_left: String,
     pub view_right: String,
     /// Flowcharts: step forward along the highlighted outgoing edge / back along the edge you came by.
+    /// These four are named for left-to-right (`LR`) charts; a top-to-bottom (`TB`) chart swaps
+    /// the pairs, so the branch keys step along the flow and the step keys switch branch.
     pub view_flow_forward: String,
     pub view_flow_back: String,
     /// Flowcharts: switch to the next / previous sibling branch (the other children of the parent).
@@ -195,7 +197,8 @@ view_down = "j"
 view_up = "k"
 view_left = "h"
 view_right = "l"
-# Flowcharts: h/l step back/forward along the arrows, j/k switch to the next/previous sibling branch,
+# Flowcharts, left to right (LR): h/l step back/forward along the arrows, j/k switch to the next/previous
+# sibling branch. Top to bottom (TB) swaps the pairs: j/k step forward/back, l/h switch branch next/previous.
 # H/J/K/L move on screen to the nearest node left/down/up/right (the arrow keys do too).
 view_flow_back = "h"
 view_flow_forward = "l"

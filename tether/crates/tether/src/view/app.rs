@@ -247,7 +247,12 @@ impl App {
         let layout = compute_layout(&init.diagram, &expanded, init.engine)?;
         let elements: HashMap<ObjectId, Element> =
             diagram::elements(&init.diagram).into_iter().map(|e| (ObjectId(e.id.clone()), e)).collect();
-        let keymap = Keymap::from_keys(&init.keys, matches!(layout.nav, layout::Nav::Flow(_)))?;
+        let flow_dir = match (&layout.nav, &init.diagram) {
+            (layout::Nav::Flow(_), diagram::Diagram::Flowchart(f)) => Some(f.direction()),
+            (layout::Nav::Flow(_), _) => Some(diagram::Direction::TB),
+            _ => None,
+        };
+        let keymap = Keymap::from_keys(&init.keys, flow_dir)?;
         let focus = match &layout.nav {
             layout::Nav::Flow(n) => n.roots.first().or(n.order.first()).cloned(),
             layout::Nav::Seq(n) => n.items.first().or(n.participants.first()).cloned(),
@@ -297,6 +302,19 @@ impl App {
 
     pub fn is_flowchart(&self) -> bool {
         matches!(self.layout.nav, layout::Nav::Flow(_))
+    }
+
+    /// Hints for the flowchart step and branch key pairs, in screen order (up/down or
+    /// left/right): `("h/l", "j/k")` for `LR`, `("j/k", "h/l")` for `TB`.
+    pub fn flow_pair_hints(&self) -> (String, String) {
+        let km = &self.keymap;
+        let pair = |a, b| format!("{}/{}", km.hint(a), km.hint(b));
+        let tb = matches!(&self.diagram, diagram::Diagram::Flowchart(f) if f.direction() == diagram::Direction::TB);
+        if tb {
+            (pair(Action::StepForward, Action::StepBack), pair(Action::BranchPrev, Action::BranchNext))
+        } else {
+            (pair(Action::StepBack, Action::StepForward), pair(Action::BranchNext, Action::BranchPrev))
+        }
     }
 
     pub fn focused_element(&self) -> Option<&Element> {

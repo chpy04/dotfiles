@@ -1,13 +1,15 @@
 //! Viewer navigation (PRD F3 "Navigation" table).
 //!
-//! Flowchart: `h`/`l` walk the flow, `j`/`k` switch branch, `HJKL` move on screen.
-//! * `l` steps forward along the highlighted outgoing edge (the branch last chosen at this node,
-//!   else the first child by position). `h` steps back along the edge we arrived by, else to
+//! Flowchart: the keys along the flow walk it, the keys across it switch branch, `HJKL` move on
+//! screen. Along is `j`/`k` for `TB` and `l`/`h` for `LR` (the keymap picks, see
+//! [`super::keys::Keymap::from_keys`]); below, "forward"/"back" and "next"/"previous" mean those keys.
+//! * Forward steps along the highlighted outgoing edge (the branch last chosen at this node,
+//!   else the first child by position). Back steps along the edge we arrived by, else to
 //!   the first parent by position.
-//! * `j` / `k` switch to the next / previous sibling branch: the other children of the node `h`
+//! * Next / previous switch sibling branch: the other children of the node a back step
 //!   would return to, ordered by target position (x for `TB`, y for `LR`), wrapping around. The
-//!   parent remembers the choice, so `h` then `l` comes back to the same branch. Roots switch
-//!   between the roots.
+//!   parent remembers the choice, so back then forward comes back to the same branch. Roots
+//!   switch between the roots.
 //! * `H` `J` `K` `L` (and the arrows) move to the nearest node in that screen direction
 //!   ([`App::spatial_target`]), the same for `TB` and `LR`. `J`/`K` remember the starting column
 //!   (curswant).
