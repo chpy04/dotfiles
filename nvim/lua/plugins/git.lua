@@ -51,6 +51,24 @@ return {
 				desc = "Git: prev hunk",
 			},
 
+			-- Changed-file navigation (follows the gitsigns base; reveals in neo-tree)
+			{
+				"]G",
+				function()
+					require("config.changed_files").step(1)
+				end,
+				silent = true,
+				desc = "Git: next changed file",
+			},
+			{
+				"[G",
+				function()
+					require("config.changed_files").step(-1)
+				end,
+				silent = true,
+				desc = "Git: prev changed file",
+			},
+
 			-- Stage / Reset (normal + visual)
 			{
 				"<leader>gs",
