@@ -198,21 +198,58 @@ function M.pick()
 		local r, why = m.resolve(root)
 		table.insert(items, { mode = m, ok = r ~= nil, detail = r and r.detail or why })
 	end
-	vim.ui.select(items, {
-		prompt = tether_active() and ("Diff base (tether: %s)"):format(vim.g.tether_git_base.rev) or "Diff base",
-		format_item = function(it)
-			local mark = it.mode.id == cur_id and "● " or "  "
-			local tail = it.detail and ("  (" .. it.detail .. ")") or ""
-			if not it.ok then
-				tail = "  [unavailable: " .. it.detail .. "]"
-			end
-			return mark .. it.mode.label .. tail
-		end,
-	}, function(choice)
+	local prompt = tether_active() and ("Diff base (tether: %s)"):format(vim.g.tether_git_base.rev) or "Diff base"
+	local function format_item(it)
+		local mark = it.mode.id == cur_id and "● " or "  "
+		local tail = it.detail and ("  (" .. it.detail .. ")") or ""
+		if not it.ok then
+			tail = "  [unavailable: " .. it.detail .. "]"
+		end
+		return mark .. it.mode.label .. tail
+	end
+	local function on_choice(choice)
 		if choice then
 			apply(choice.mode.id, root)
 		end
-	end)
+	end
+
+	-- Telescope in normal mode: j/k move, <CR> picks, q/<Esc> close. Cursor starts on the current mode.
+	local has_telescope = pcall(require, "telescope")
+	if not has_telescope then
+		return vim.ui.select(items, { prompt = prompt, format_item = format_item }, on_choice)
+	end
+	local pickers, finders, conf = require("telescope.pickers"), require("telescope.finders"), require("telescope.config").values
+	local actions, action_state = require("telescope.actions"), require("telescope.actions.state")
+	local start = 1
+	for i, it in ipairs(items) do
+		if it.mode.id == cur_id then
+			start = i
+		end
+	end
+	pickers
+		.new(require("telescope.themes").get_dropdown({ initial_mode = "normal", previewer = false }), {
+			prompt_title = prompt,
+			finder = finders.new_table({
+				results = items,
+				entry_maker = function(it)
+					local text = format_item(it)
+					return { value = it, display = text, ordinal = text }
+				end,
+			}),
+			sorter = conf.generic_sorter({}),
+			default_selection_index = start,
+			attach_mappings = function(bufnr)
+				actions.select_default:replace(function()
+					local entry = action_state.get_selected_entry()
+					actions.close(bufnr)
+					vim.schedule(function()
+						on_choice(entry and entry.value)
+					end)
+				end)
+				return true
+			end,
+		})
+		:find()
 end
 
 --- The gitsigns-style base diffview should open on (nil = diffview's default: index vs worktree).
