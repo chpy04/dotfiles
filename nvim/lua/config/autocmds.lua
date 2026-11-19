@@ -90,3 +90,39 @@ vim.api.nvim_create_autocmd("BufWritePre", {
 		vim.fn.winrestview(view)
 	end,
 })
+
+----------------------------------------------------------------------
+-- Neo-tree: make the cursor line a solid accent bar
+-- Colours are pulled from whatever theme is active (theme picker swaps
+-- them), so this re-runs on every colorscheme change.
+----------------------------------------------------------------------
+local function neotree_cursorline()
+	local function get(name)
+		return vim.api.nvim_get_hl(0, { name = name, link = false })
+	end
+	-- Mix the theme's accent into the background. Neo-tree draws names/icons with their
+	-- own fg colours, so the bar must stay dark/light enough for those to read on it.
+	local function blend(fg, bg, alpha)
+		local function ch(c, shift)
+			return bit.band(bit.rshift(c, shift), 0xff)
+		end
+		local out = 0
+		for _, shift in ipairs({ 16, 8, 0 }) do
+			local v = math.floor(ch(fg, shift) * alpha + ch(bg, shift) * (1 - alpha) + 0.5)
+			out = out + bit.lshift(v, shift)
+		end
+		return out
+	end
+	local accent = get("Function").fg or get("Title").fg or get("Directory").fg
+	local bg = get("NeoTreeNormal").bg or get("Normal").bg or (vim.o.background == "light" and 0xffffff or 0x000000)
+	if accent then
+		vim.api.nvim_set_hl(0, "NeoTreeCursorLine", { bg = blend(accent, bg, 0.35), bold = true })
+	else
+		vim.api.nvim_set_hl(0, "NeoTreeCursorLine", { link = "Visual" })
+	end
+end
+
+vim.api.nvim_create_autocmd("ColorScheme", {
+	desc = "Neo-tree: high-contrast cursor line",
+	callback = neotree_cursorline,
+})
