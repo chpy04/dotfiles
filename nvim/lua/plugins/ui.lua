@@ -51,6 +51,13 @@ return {
 					{ "filename", path = 1 },
 				},
 				lualine_x = {
+					-- Diff base (<leader>gB); hidden on the default unstaged view
+					{
+						function()
+							return require("config.diffbase").status()
+						end,
+						color = { fg = "#e0af68" },
+					},
 					-- Noice macro recording indicator
 					{
 						function()

@@ -51,6 +51,16 @@ return {
 				desc = "Git: prev hunk",
 			},
 
+			-- Diff base picker (what the highlighting compares against)
+			{
+				"<leader>gB",
+				function()
+					require("config.diffbase").pick()
+				end,
+				silent = true,
+				desc = "Git: pick diff base",
+			},
+
 			-- Changed-file navigation (follows the gitsigns base; reveals in neo-tree)
 			{
 				"]G",
@@ -197,6 +207,13 @@ return {
 		},
 		keys = {
 			{ "<leader>gdo", "<cmd>DiffviewOpen<cr>", desc = "Open Diffview" },
+			{
+				"<leader>gdb",
+				function()
+					require("config.diffbase").diffview_open()
+				end,
+				desc = "Open Diffview on the diff base",
+			},
 			{ "<leader>gdc", "<cmd>DiffviewClose<cr>", desc = "Close Diffview" },
 			{ "<leader>gdh", "<cmd>DiffviewFileHistory<cr>", desc = "File History (all)" },
 			{ "<leader>gdf", "<cmd>DiffviewFileHistory %<cr>", desc = "File History (current)" },
